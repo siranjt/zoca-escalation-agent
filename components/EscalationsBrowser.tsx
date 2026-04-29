@@ -1,0 +1,414 @@
+"use client";
+
+import { useMemo, useState } from "react";
+
+type Channel = "app_chat" | "email" | "phone" | "video" | "sms";
+type Sender = "client" | "team" | "unknown";
+
+interface Comm {
+  channel: Channel;
+  createdAt: string;
+  sender: Sender;
+  body: string;
+  durationSec?: number;
+}
+
+interface CustomerCard {
+  bizName: string;
+  entityId: string;
+  customerId: string;
+  email: string;
+  phone: string;
+  amName: string;
+  spName: string;
+  aeName: string;
+  status: string;
+  churnDate: string;
+  monthlyRevenue?: number;
+}
+
+interface ApiResponse {
+  ok: boolean;
+  query?: string;
+  matches?: CustomerCard[];
+  customer?: CustomerCard | null;
+  comms?: Comm[];
+  stats?: {
+    total: number;
+    byChannel: Record<string, number>;
+    bySender: Record<string, number>;
+  };
+  lookupNotes?: string[];
+  error?: string;
+}
+
+const CHANNELS: { key: Channel; label: string; cls: string }[] = [
+  { key: "app_chat", label: "App Chat", cls: "bg-accent/15 text-accent border-accent/40" },
+  { key: "email", label: "Email", cls: "bg-indigo-500/15 text-indigo-300 border-indigo-500/40" },
+  { key: "phone", label: "Phone", cls: "bg-ok/15 text-ok border-ok/40" },
+  { key: "video", label: "Video", cls: "bg-purple-500/15 text-purple-300 border-purple-500/40" },
+  { key: "sms", label: "SMS", cls: "bg-warn/15 text-warn border-warn/40" },
+];
+
+const SENDERS: { key: Sender; label: string; cls: string }[] = [
+  { key: "client", label: "Client", cls: "bg-pink-500/15 text-pink-300 border-pink-500/40" },
+  { key: "team", label: "Team", cls: "bg-teal-500/15 text-teal-300 border-teal-500/40" },
+  { key: "unknown", label: "Unknown", cls: "bg-panel2 text-muted border-border" },
+];
+
+const TIME_WINDOWS = [
+  { key: "30", label: "30 days" },
+  { key: "90", label: "90 days" },
+  { key: "365", label: "1 year" },
+  { key: "0", label: "All time" },
+];
+
+function relTime(iso: string): string {
+  const d = Date.parse(iso);
+  if (!Number.isFinite(d)) return "";
+  const sec = Math.floor((Date.now() - d) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+function fmtDuration(sec?: number): string {
+  if (!sec || sec < 0) return "";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m ? `${m}m ${s}s` : `${s}s`;
+}
+
+export default function EscalationsBrowser() {
+  const [query, setQuery] = useState("");
+  const [sinceDays, setSinceDays] = useState("365");
+  const [loading, setLoading] = useState(false);
+  const [response, setResponse] = useState<ApiResponse | null>(null);
+
+  // Filters (client-side, applied to whatever the API returned)
+  const [channelFilter, setChannelFilter] = useState<Set<Channel>>(new Set(CHANNELS.map((c) => c.key)));
+  const [senderFilter, setSenderFilter] = useState<Sender | "all">("client");
+  const [textFilter, setTextFilter] = useState("");
+
+  async function lookup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true);
+    setResponse(null);
+    try {
+      const url = new URL("/api/escalations", window.location.origin);
+      url.searchParams.set("q", query.trim());
+      url.searchParams.set("sinceDays", sinceDays);
+      const res = await fetch(url.toString());
+      const data = (await res.json()) as ApiResponse;
+      setResponse(data);
+    } catch (err: any) {
+      setResponse({ ok: false, error: err?.message || "Network error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const filtered = useMemo(() => {
+    if (!response?.comms) return [];
+    const t = textFilter.trim().toLowerCase();
+    return response.comms.filter((m) => {
+      if (!channelFilter.has(m.channel)) return false;
+      if (senderFilter !== "all" && m.sender !== senderFilter) return false;
+      if (t && !(m.body || "").toLowerCase().includes(t)) return false;
+      return true;
+    });
+  }, [response, channelFilter, senderFilter, textFilter]);
+
+  function toggleChannel(c: Channel) {
+    setChannelFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return next;
+    });
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* SEARCH */}
+      <form onSubmit={lookup} className="rounded-2xl border border-border bg-panel p-6">
+        <label className="block text-sm text-muted mb-2">Search</label>
+        <div className="flex gap-2">
+          <input
+            className="flex-1 rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
+            placeholder="Lacquer Lounge   ·   8e3f…   ·   owner@bizname.com   ·   AbCdEf123"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
+          <select
+            className="rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
+            value={sinceDays}
+            onChange={(e) => setSinceDays(e.target.value)}
+            title="Time window"
+          >
+            {TIME_WINDOWS.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            disabled={loading || !query.trim()}
+            className="rounded-lg bg-accent text-white px-4 font-medium disabled:opacity-50"
+          >
+            {loading ? "Looking up…" : "Look up"}
+          </button>
+        </div>
+      </form>
+
+      {/* LOADING / EMPTY / ERROR */}
+      {!response && !loading && (
+        <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
+          Results will appear here. Tip: substring matches work for biz names, so "lacquer" finds
+          "Lacquer Lounge LLC".
+        </div>
+      )}
+
+      {loading && (
+        <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
+          Fetching BaseSheet, then pulling all 5 comms feeds for that entity…
+        </div>
+      )}
+
+      {response && response.ok === false && (
+        <div className="rounded-2xl border border-err/40 bg-err/10 p-6">
+          <p className="text-err font-medium">Error</p>
+          <p className="text-sm mt-2 whitespace-pre-wrap">{response.error}</p>
+        </div>
+      )}
+
+      {response && response.ok && !response.customer && (
+        <div className="rounded-2xl border border-warn/40 bg-warn/10 p-6">
+          <p className="font-medium text-warn">No customer match</p>
+          <p className="text-sm text-muted mt-2">
+            Couldn't find anyone in BaseSheet for "{response.query}". Try a different spelling, an
+            email, or paste the entity UUID.
+          </p>
+        </div>
+      )}
+
+      {response && response.ok && response.customer && (
+        <>
+          {/* CUSTOMER CARD */}
+          <div className="rounded-2xl border border-border bg-panel p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-medium">{response.customer.bizName || "(no name)"}</h2>
+                <p className="text-sm text-muted mt-1">
+                  {response.customer.email && (
+                    <span>
+                      <span className="text-text">{response.customer.email}</span>
+                      {response.customer.phone ? <span> · {response.customer.phone}</span> : null}
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-muted mt-2">
+                  entity_id <code className="text-text">{response.customer.entityId || "—"}</code>
+                  {response.customer.customerId ? (
+                    <>
+                      {" · "}cb_id <code className="text-text">{response.customer.customerId}</code>
+                    </>
+                  ) : null}
+                </p>
+              </div>
+              <div className="text-right text-sm">
+                {response.customer.amName && (
+                  <p>
+                    <span className="text-muted">AM</span> {response.customer.amName}
+                  </p>
+                )}
+                {response.customer.spName && (
+                  <p>
+                    <span className="text-muted">SP</span> {response.customer.spName}
+                  </p>
+                )}
+                {response.customer.aeName && (
+                  <p>
+                    <span className="text-muted">AE</span> {response.customer.aeName}
+                  </p>
+                )}
+                {response.customer.status && (
+                  <p className="mt-1 text-xs text-muted">status: {response.customer.status}</p>
+                )}
+                {typeof response.customer.monthlyRevenue === "number" && (
+                  <p className="text-xs text-muted">
+                    MRR ${response.customer.monthlyRevenue.toFixed(2)}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* MULTI-MATCH WARNING */}
+            {response.matches && response.matches.length > 1 && (
+              <div className="mt-4 text-xs text-muted">
+                <p className="mb-1">{response.matches.length} matches found. Showing first; others:</p>
+                <ul className="list-disc list-inside">
+                  {response.matches.slice(1).map((m) => (
+                    <li key={m.entityId}>
+                      <span className="text-text">{m.bizName}</span> — {m.email || "(no email)"} ·{" "}
+                      <code>{m.entityId.slice(0, 8)}…</code>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-muted">
+                  To pin to one, paste their full <code>entity_id</code> in the search box.
+                </p>
+              </div>
+            )}
+
+            {response.lookupNotes && response.lookupNotes.length > 0 && (
+              <div className="mt-3 text-xs text-muted">
+                {response.lookupNotes.map((n, i) => (
+                  <p key={i}>· {n}</p>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* STATS */}
+          {response.stats && (
+            <div className="rounded-2xl border border-border bg-panel p-6">
+              <p className="text-muted text-sm mb-3">
+                {response.stats.total} message{response.stats.total === 1 ? "" : "s"} in window
+              </p>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {CHANNELS.map((c) => {
+                  const n = response.stats!.byChannel[c.key] || 0;
+                  return (
+                    <span
+                      key={c.key}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${c.cls}`}
+                    >
+                      {c.label} <span className="font-semibold">{n}</span>
+                    </span>
+                  );
+                })}
+                <span className="mx-2 text-muted">·</span>
+                {SENDERS.map((s) => {
+                  const n = response.stats!.bySender[s.key] || 0;
+                  return (
+                    <span
+                      key={s.key}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${s.cls}`}
+                    >
+                      {s.label} <span className="font-semibold">{n}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* FILTERS */}
+          <div className="rounded-2xl border border-border bg-panel p-6 space-y-4">
+            <div>
+              <p className="text-muted text-sm mb-2">Channels</p>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {CHANNELS.map((c) => {
+                  const on = channelFilter.has(c.key);
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => toggleChannel(c.key)}
+                      className={`rounded-full border px-3 py-1 ${
+                        on ? c.cls : "border-border text-muted bg-panel2"
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <p className="text-muted text-sm mb-2">Sender</p>
+              <div className="flex gap-2 text-xs">
+                {(["all", "client", "team", "unknown"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSenderFilter(s)}
+                    className={`rounded-full border px-3 py-1 ${
+                      senderFilter === s
+                        ? "border-accent text-accent bg-accent/10"
+                        : "border-border text-muted bg-panel2"
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-muted text-sm mb-2">Search inside messages</p>
+              <input
+                className="w-full rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
+                placeholder="e.g. refund, cancel, charge…"
+                value={textFilter}
+                onChange={(e) => setTextFilter(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* TIMELINE */}
+          <div className="rounded-2xl border border-border bg-panel p-2">
+            {filtered.length === 0 ? (
+              <p className="p-6 text-muted text-sm">
+                No messages match these filters. Loosen the filters or expand the time window above.
+              </p>
+            ) : (
+              <ul>
+                {filtered.map((m, i) => {
+                  const cMeta = CHANNELS.find((c) => c.key === m.channel);
+                  const sMeta = SENDERS.find((s) => s.key === m.sender);
+                  return (
+                    <li
+                      key={`${m.createdAt}-${i}`}
+                      className="border-b border-border last:border-b-0 px-4 py-3"
+                    >
+                      <div className="flex items-baseline gap-2 text-xs">
+                        <span
+                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${cMeta?.cls || ""}`}
+                        >
+                          {cMeta?.label || m.channel}
+                        </span>
+                        <span
+                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${sMeta?.cls || ""}`}
+                        >
+                          {sMeta?.label || m.sender}
+                        </span>
+                        {m.durationSec ? (
+                          <span className="text-muted">{fmtDuration(m.durationSec)}</span>
+                        ) : null}
+                        <span className="ml-auto text-muted" title={m.createdAt}>
+                          {relTime(m.createdAt)}
+                        </span>
+                      </div>
+                      <p className="text-sm mt-1.5 whitespace-pre-wrap">{m.body || "(no body)"}</p>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

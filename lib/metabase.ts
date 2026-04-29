@@ -144,6 +144,37 @@ export async function findBaseSheetRow(opts: {
   return matches[0] || null;
 }
 
+// Lenient lookup used by the escalation-history view. Tries exact match first
+// across all id-like fields, then falls back to substring match on biz name
+// so users don't have to type "Lacquer Lounge LLC" exactly.
+export async function searchBaseSheet(query: string, limit = 10): Promise<BaseSheetRow[]> {
+  const all = await fetchBaseSheet();
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return [];
+
+  // Exact id-like matches win first.
+  const exact = all.filter(
+    (r) =>
+      r.entity_id?.toLowerCase() === q ||
+      r.customer_id?.toLowerCase() === q ||
+      r.app_email?.toLowerCase() === q ||
+      r.gbp_email?.toLowerCase() === q ||
+      r.dct_email?.toLowerCase() === q ||
+      r.bizname?.toLowerCase() === q
+  );
+  if (exact.length) return exact.slice(0, limit);
+
+  // Substring on biz name and emails.
+  const fuzzy = all.filter((r) => {
+    const name = (r.bizname || "").toLowerCase();
+    const emails = [r.app_email, r.gbp_email, r.dct_email]
+      .map((e) => (e || "").toLowerCase())
+      .join(" ");
+    return name.includes(q) || emails.includes(q);
+  });
+  return fuzzy.slice(0, limit);
+}
+
 // --- Communications --------------------------------------------------------
 
 const FIELD_OF: Record<Channel, { created: string; sender: string; body: string; entity: string; duration?: string }> = {
@@ -184,7 +215,8 @@ function truncate(text: string, max: number): string {
 export async function fetchCommsForEntity(entityId: string, opts?: { sinceDays?: number; perChannelLimit?: number }): Promise<CommsMessage[]> {
   const sinceDays = opts?.sinceDays ?? 90;
   const perChannelLimit = opts?.perChannelLimit ?? 30;
-  const cutoff = Date.now() - sinceDays * 24 * 3600 * 1000;
+  // sinceDays <= 0 means "no time filter" — used by the all-time history view.
+  const cutoff = sinceDays > 0 ? Date.now() - sinceDays * 24 * 3600 * 1000 : 0;
   const channels: Channel[] = ["app_chat", "email", "phone", "video", "sms"];
   const all: CommsMessage[] = [];
   await Promise.all(

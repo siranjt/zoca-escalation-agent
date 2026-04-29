@@ -52,13 +52,21 @@ export default function Page() {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight">Zoca Escalation Agent</h1>
-        <p className="text-muted mt-2">
-          Paste an escalation from any channel. The agent will identify the customer, pull
-          their Chargebee + comms history, then return triage, a summary, a draft reply, and
-          a routing recommendation.
-        </p>
+      <header className="mb-8 flex items-end justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Zoca Escalation Agent</h1>
+          <p className="text-muted mt-2">
+            Paste an escalation from any channel. The agent will identify the customer, pull
+            their Chargebee + comms history, then return triage, a summary, a draft reply, and
+            a routing recommendation.
+          </p>
+        </div>
+        <a
+          href="/escalations"
+          className="text-sm text-muted hover:text-text underline-offset-4 hover:underline whitespace-nowrap"
+        >
+          Customer history →
+        </a>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-2">
