@@ -74,6 +74,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") || "").trim();
   const channelParam = (url.searchParams.get("channel") || "").trim().toLowerCase();
+  const skipComms = url.searchParams.get("skipComms") === "1";
   const sinceDays = Number(url.searchParams.get("sinceDays") ?? "365");
   const perChannelLimit = Number(url.searchParams.get("perChannelLimit") ?? "200");
   const timeoutMs = Number(url.searchParams.get("timeoutMs") ?? "");
@@ -138,8 +139,36 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // FAST PATH — customer + tickets only. No comms fetch. Used by phase 1
+    // of the UI so the page can render immediately.
+    if (skipComms) {
+      const ticketsRes = await fetchTicketsForCustomer({
+        entityId: primary.entity_id,
+        customerId: primary.customer_id,
+        bizName: primary.bizname,
+        sinceDays: 0,
+        limit: 50,
+      }).catch((): MetabaseTicket[] => []);
+
+      return NextResponse.json({
+        ok: true,
+        query: q,
+        matches: matches.map(toCard),
+        customer: toCard(primary),
+        comms: [],
+        stats: { total: 0, byChannel: {}, bySender: {} },
+        perChannelStatus: {},
+        tickets: ticketsRes,
+        skippedComms: true,
+        lookupNotes:
+          matches.length > 1
+            ? [`${matches.length} BaseSheet rows matched "${q}". Showing the first.`]
+            : [],
+      });
+    }
+
     // MULTI-CHANNEL mode (default).
-    // Run comms fetch (slow, big CSVs) and Linear ticket fetch (fast, GraphQL)
+    // Run comms fetch (slow, big CSVs) and ticket fetch (fast, smaller CSV)
     // in parallel — we stitch them together at the end.
     const [result, ticketsRes] = await Promise.all([
       fetchCommsForEntity(primary.entity_id, {

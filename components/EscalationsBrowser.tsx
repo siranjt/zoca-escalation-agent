@@ -68,9 +68,16 @@ interface ApiResponse {
   };
   perChannelStatus?: Partial<Record<Channel, ChannelStatus>>;
   tickets?: Ticket[];
+  skippedComms?: boolean;
   lookupNotes?: string[];
   error?: string;
 }
+
+type CommsLoadState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready" }
+  | { status: "error"; message: string };
 
 interface TriageResult {
   severity: "P0" | "P1" | "P2" | "P3";
@@ -141,7 +148,11 @@ export default function EscalationsBrowser() {
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
 
-  // Triage state — runs as phase-2 after the customer/comms/tickets phase 1.
+  // Comms load is deliberately kicked off after phase 1 (customer + tickets)
+  // because the comms CSVs are huge and frequently exceed the function timeout.
+  const [commsState, setCommsState] = useState<CommsLoadState>({ status: "idle" });
+
+  // Triage state — runs as phase 3 after comms arrive.
   const [triage, setTriage] = useState<TriageState>({ status: "idle", sourceMessage: null, result: null });
 
   // Per-channel "retry" busy state
@@ -157,14 +168,17 @@ export default function EscalationsBrowser() {
     if (!query.trim()) return;
     setLoading(true);
     setResponse(null);
+    setCommsState({ status: "idle" });
     setTriage({ status: "idle", sourceMessage: null, result: null });
 
+    // PHASE 1 — customer + tickets (skip the slow comms fetch).
     let phase1: ApiResponse | null = null;
     try {
-      const url = new URL("/api/escalations", window.location.origin);
-      url.searchParams.set("q", query.trim());
-      url.searchParams.set("sinceDays", sinceDays);
-      const res = await fetch(url.toString());
+      const u = new URL("/api/escalations", window.location.origin);
+      u.searchParams.set("q", query.trim());
+      u.searchParams.set("sinceDays", sinceDays);
+      u.searchParams.set("skipComms", "1");
+      const res = await fetch(u.toString());
       const text = await res.text();
       try {
         phase1 = JSON.parse(text) as ApiResponse;
@@ -173,62 +187,113 @@ export default function EscalationsBrowser() {
         setResponse({
           ok: false,
           error:
-            "The server returned a non-JSON response (likely a Vercel function timeout). Try again — the CSV cache should be primed now and the next call will be much faster. Or load each channel individually via the retry buttons.",
+            "Phase 1 returned non-JSON (Vercel function timeout). Customer + tickets lookup failed. Retry — the BaseSheet CSV cache should be primed now.",
         });
+        setLoading(false);
+        return;
       }
     } catch (err: any) {
       setResponse({ ok: false, error: err?.message || "Network error" });
-    } finally {
       setLoading(false);
+      return;
     }
+    setLoading(false);
 
-    // PHASE 2 — auto-triage the latest customer-initiated message.
-    if (phase1?.ok && phase1.customer && phase1.comms) {
-      const latestClient = phase1.comms.find((m) => m.sender === "client");
-      if (!latestClient) {
-        setTriage({
-          status: "skipped",
-          sourceMessage: null,
-          result: null,
-          reason: "No client-initiated message in this time window — nothing to triage.",
+    if (!phase1?.ok || !phase1.customer) return;
+
+    // PHASE 2 — comms history. Big CSVs, may time out. Errors here are
+    // contained to the Comms section without breaking the page.
+    setCommsState({ status: "loading" });
+    let phase2: ApiResponse | null = null;
+    try {
+      const u = new URL("/api/escalations", window.location.origin);
+      u.searchParams.set("q", query.trim());
+      u.searchParams.set("sinceDays", sinceDays);
+      const res = await fetch(u.toString());
+      const text = await res.text();
+      try {
+        phase2 = JSON.parse(text) as ApiResponse;
+      } catch {
+        setCommsState({
+          status: "error",
+          message:
+            "Comms server returned non-JSON (Vercel function timeout on the 130 MB feeds). Try again — the cache should be primed now. Per-channel retry buttons may still work.",
         });
         return;
       }
-      setTriage({ status: "loading", sourceMessage: latestClient, result: null });
-      try {
-        const r = await fetch("/api/escalation", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: latestClient.body || "(empty body)",
-            source: { medium: latestClient.channel, receivedAt: latestClient.createdAt },
-            customerHint: {
-              entityId: phase1.customer.entityId,
-              customerId: phase1.customer.customerId,
-              email: phase1.customer.email,
-              bizName: phase1.customer.bizName,
-            },
-          }),
+      if (!phase2.ok) {
+        setCommsState({
+          status: "error",
+          message: phase2.error || "Comms fetch failed",
         });
-        const tdata = await r.json();
-        if (tdata.ok && tdata.result) {
-          setTriage({ status: "ready", sourceMessage: latestClient, result: tdata.result as TriageResult });
-        } else {
-          setTriage({
-            status: "error",
-            sourceMessage: latestClient,
-            result: null,
-            error: tdata.error || "Agent did not return a result",
-          });
-        }
-      } catch (err: any) {
+        return;
+      }
+      // Merge the comms + perChannelStatus into the existing response
+      // (we keep the customer + tickets from phase 1 unchanged).
+      setResponse((prev) =>
+        prev
+          ? {
+              ...prev,
+              comms: phase2!.comms,
+              stats: phase2!.stats,
+              perChannelStatus: phase2!.perChannelStatus,
+              skippedComms: false,
+              lookupNotes: phase2!.lookupNotes?.length ? phase2!.lookupNotes : prev.lookupNotes,
+            }
+          : prev
+      );
+      setCommsState({ status: "ready" });
+    } catch (err: any) {
+      setCommsState({ status: "error", message: err?.message || "Network error" });
+      return;
+    }
+
+    // PHASE 3 — auto-triage the latest customer-initiated message.
+    const comms = phase2?.comms || [];
+    const latestClient = comms.find((m) => m.sender === "client");
+    if (!latestClient) {
+      setTriage({
+        status: "skipped",
+        sourceMessage: null,
+        result: null,
+        reason: "No client-initiated message in this time window — nothing to triage.",
+      });
+      return;
+    }
+    setTriage({ status: "loading", sourceMessage: latestClient, result: null });
+    try {
+      const r = await fetch("/api/escalation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: latestClient.body || "(empty body)",
+          source: { medium: latestClient.channel, receivedAt: latestClient.createdAt },
+          customerHint: {
+            entityId: phase1.customer.entityId,
+            customerId: phase1.customer.customerId,
+            email: phase1.customer.email,
+            bizName: phase1.customer.bizName,
+          },
+        }),
+      });
+      const tdata = await r.json();
+      if (tdata.ok && tdata.result) {
+        setTriage({ status: "ready", sourceMessage: latestClient, result: tdata.result as TriageResult });
+      } else {
         setTriage({
           status: "error",
           sourceMessage: latestClient,
           result: null,
-          error: err?.message || "Network error during triage",
+          error: tdata.error || "Agent did not return a result",
         });
       }
+    } catch (err: any) {
+      setTriage({
+        status: "error",
+        sourceMessage: latestClient,
+        result: null,
+        error: err?.message || "Network error during triage",
+      });
     }
   }
 
@@ -753,6 +818,60 @@ export default function EscalationsBrowser() {
           {response.tickets && response.tickets.length === 0 && response.customer.entityId && (
             <div className="rounded-2xl border border-border bg-panel p-4 text-xs text-muted">
               No tickets found for this customer in the Metabase ticket feed (entity_id, customer_id, or business name).
+            </div>
+          )}
+
+          {/* COMMS LOADING / ERROR (phase 2) */}
+          {commsState.status === "loading" && (
+            <div className="rounded-2xl border border-border bg-panel p-6 text-muted text-sm">
+              Fetching comms history (5 channels, ~130 MB each — first call after a redeploy can be slow)…
+            </div>
+          )}
+          {commsState.status === "error" && (
+            <div className="rounded-2xl border border-warn/40 bg-warn/5 p-6">
+              <p className="text-warn font-medium">Comms history unavailable</p>
+              <p className="text-sm text-muted mt-2">{commsState.message}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  // Manually retry phase 2 only.
+                  setCommsState({ status: "loading" });
+                  (async () => {
+                    try {
+                      const u = new URL("/api/escalations", window.location.origin);
+                      u.searchParams.set("q", response.query || query.trim());
+                      u.searchParams.set("sinceDays", sinceDays);
+                      const r = await fetch(u.toString());
+                      const text = await r.text();
+                      const data = JSON.parse(text) as ApiResponse;
+                      if (!data.ok) {
+                        setCommsState({ status: "error", message: data.error || "Failed" });
+                        return;
+                      }
+                      setResponse((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              comms: data.comms,
+                              stats: data.stats,
+                              perChannelStatus: data.perChannelStatus,
+                              skippedComms: false,
+                            }
+                          : prev
+                      );
+                      setCommsState({ status: "ready" });
+                    } catch (err: any) {
+                      setCommsState({
+                        status: "error",
+                        message: err?.message || "Network error",
+                      });
+                    }
+                  })();
+                }}
+                className="mt-3 rounded-lg bg-accent text-white px-3 py-2 text-sm font-medium"
+              >
+                Retry comms fetch
+              </button>
             </div>
           )}
 
