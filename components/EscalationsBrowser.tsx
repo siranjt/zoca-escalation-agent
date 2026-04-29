@@ -33,6 +33,21 @@ interface ChannelStatus {
   error?: string;
 }
 
+interface Ticket {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  priority: number;
+  priorityLabel: string;
+  createdAt: string;
+  updatedAt: string;
+  state: { name: string; type: string };
+  team: { id: string; name: string; key: string };
+  assignee: { name: string; email: string } | null;
+  labels: string[];
+}
+
 interface ApiResponse {
   ok: boolean;
   query?: string;
@@ -45,6 +60,7 @@ interface ApiResponse {
     bySender: Record<string, number>;
   };
   perChannelStatus?: Partial<Record<Channel, ChannelStatus>>;
+  tickets?: Ticket[];
   lookupNotes?: string[];
   error?: string;
 }
@@ -191,12 +207,16 @@ export default function EscalationsBrowser() {
   const filtered = useMemo(() => {
     if (!response?.comms) return [];
     const t = textFilter.trim().toLowerCase();
-    return response.comms.filter((m) => {
+    const out = response.comms.filter((m) => {
       if (!channelFilter.has(m.channel)) return false;
       if (senderFilter !== "all" && m.sender !== senderFilter) return false;
       if (t && !(m.body || "").toLowerCase().includes(t)) return false;
       return true;
     });
+    // Defensive re-sort so the timeline is always latest-first regardless of
+    // server-side ordering quirks.
+    out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    return out;
   }, [response, channelFilter, senderFilter, textFilter]);
 
   function toggleChannel(c: Channel) {
@@ -392,6 +412,87 @@ export default function EscalationsBrowser() {
             </div>
           )}
 
+          {/* LINEAR TICKETS for this customer */}
+          {response.tickets && response.tickets.length > 0 && (
+            <div className="rounded-2xl border border-border bg-panel p-6">
+              <div className="flex items-baseline justify-between mb-3">
+                <h3 className="text-base font-medium">Linear tickets for this customer</h3>
+                <span className="text-xs text-muted">
+                  {response.tickets.length} match{response.tickets.length === 1 ? "" : "es"} · sorted latest first
+                </span>
+              </div>
+              <ul className="space-y-2">
+                {response.tickets.map((t) => {
+                  const statusCls =
+                    t.state.type === "completed"
+                      ? "bg-ok/15 text-ok border-ok/40"
+                      : t.state.type === "started"
+                        ? "bg-accent/15 text-accent border-accent/40"
+                        : t.state.type === "cancelled"
+                          ? "bg-err/15 text-err border-err/40"
+                          : "bg-panel2 text-text border-border";
+                  return (
+                    <li
+                      key={t.id}
+                      className="rounded-lg border border-border bg-panel2 px-3 py-2"
+                    >
+                      <div className="flex items-baseline gap-2 text-xs">
+                        <span className="font-mono text-muted">{t.identifier}</span>
+                        <span
+                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${statusCls}`}
+                        >
+                          {t.state.name}
+                        </span>
+                        <span className="text-muted">{t.team.name}</span>
+                        {t.priorityLabel && t.priorityLabel !== "No priority" && (
+                          <span className="inline-flex items-center rounded-md border border-warn/40 bg-warn/10 text-warn px-1.5 py-0.5">
+                            {t.priorityLabel}
+                          </span>
+                        )}
+                        <span className="ml-auto text-muted" title={t.updatedAt}>
+                          {relTime(t.updatedAt)}
+                        </span>
+                      </div>
+                      <div className="mt-1.5">
+                        <a
+                          href={t.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm font-medium hover:underline underline-offset-4"
+                        >
+                          {t.title}
+                        </a>
+                      </div>
+                      {t.assignee?.name && (
+                        <p className="mt-1 text-xs text-muted">
+                          <span className="text-muted">Assigned</span>{" "}
+                          <span className="text-text">{t.assignee.name}</span>
+                          {t.labels.length > 0 && (
+                            <>
+                              {" · "}
+                              <span className="text-muted">Labels</span> {t.labels.join(", ")}
+                            </>
+                          )}
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-xs text-muted mt-3">
+                Matches by entity_id in description or business name in title — across Finance + CX
+                teams, all four escalation patterns.
+              </p>
+            </div>
+          )}
+
+          {response.tickets && response.tickets.length === 0 && response.customer.entityId && (
+            <div className="rounded-2xl border border-border bg-panel p-4 text-xs text-muted">
+              No Linear escalation tickets found for this customer (Finance + CX teams, all four
+              patterns).
+            </div>
+          )}
+
           {/* STATS */}
           {response.stats && (
             <div className="rounded-2xl border border-border bg-panel p-6">
@@ -482,7 +583,11 @@ export default function EscalationsBrowser() {
           </div>
 
           {/* TIMELINE */}
-          <div className="rounded-2xl border border-border bg-panel p-2">
+          <div className="rounded-2xl border border-border bg-panel">
+            <div className="px-4 py-2 border-b border-border text-xs text-muted flex items-center justify-between">
+              <span>Sorted latest first (newest at top)</span>
+              <span>{filtered.length} of {response.comms?.length ?? 0} shown</span>
+            </div>
             {filtered.length === 0 ? (
               <p className="p-6 text-muted text-sm">
                 No messages match these filters. Loosen the filters or expand the time window above.

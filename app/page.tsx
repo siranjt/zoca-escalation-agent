@@ -61,12 +61,14 @@ export default function Page() {
             a routing recommendation.
           </p>
         </div>
-        <a
-          href="/escalations"
-          className="text-sm text-muted hover:text-text underline-offset-4 hover:underline whitespace-nowrap"
-        >
-          Customer history →
-        </a>
+        <nav className="flex gap-4 text-sm text-muted whitespace-nowrap">
+          <a href="/escalations" className="hover:text-text underline-offset-4 hover:underline">
+            History
+          </a>
+          <a href="/tickets" className="hover:text-text underline-offset-4 hover:underline">
+            Tickets
+          </a>
+        </nav>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-2">

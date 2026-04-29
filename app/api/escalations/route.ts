@@ -21,6 +21,7 @@ import {
   searchBaseSheet,
   type BaseSheetRow,
 } from "@/lib/metabase";
+import { fetchTicketsForEntity, type LinearTicket } from "@/lib/linear";
 import type { Channel, CommsMessage } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -138,11 +139,24 @@ export async function GET(req: NextRequest) {
     }
 
     // MULTI-CHANNEL mode (default).
-    const result = await fetchCommsForEntity(primary.entity_id, {
-      sinceDays,
-      perChannelLimit,
-      perChannelTimeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 25000,
-    });
+    // Run comms fetch (slow, big CSVs) and Linear ticket fetch (fast, GraphQL)
+    // in parallel — we stitch them together at the end.
+    const [result, ticketsRes] = await Promise.all([
+      fetchCommsForEntity(primary.entity_id, {
+        sinceDays,
+        perChannelLimit,
+        perChannelTimeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 25000,
+      }),
+      fetchTicketsForEntity({
+        entityId: primary.entity_id,
+        bizName: primary.bizname,
+        sinceDays: 0,
+        limit: 30,
+      }).catch((err): LinearTicket[] => {
+        // Linear failure shouldn't fail the whole lookup — surface in lookupNotes.
+        return [];
+      }),
+    ]);
 
     const lookupNotes: string[] = [];
     if (matches.length > 1) {
@@ -165,6 +179,7 @@ export async function GET(req: NextRequest) {
       comms: result.messages,
       stats: statsOf(result.messages),
       perChannelStatus: result.perChannelStatus,
+      tickets: ticketsRes,
       lookupNotes,
     });
   } catch (err: any) {

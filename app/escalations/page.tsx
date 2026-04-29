@@ -15,12 +15,14 @@ export default function Page() {
             pull every message they appear in across App Chat, Email, Phone, Video, and SMS.
           </p>
         </div>
-        <a
-          href="/"
-          className="text-sm text-muted hover:text-text underline-offset-4 hover:underline"
-        >
-          ← Back to triage
-        </a>
+        <nav className="flex gap-4 text-sm text-muted whitespace-nowrap">
+          <a href="/" className="hover:text-text underline-offset-4 hover:underline">
+            Triage
+          </a>
+          <a href="/tickets" className="hover:text-text underline-offset-4 hover:underline">
+            Tickets
+          </a>
+        </nav>
       </header>
       <EscalationsBrowser />
     </main>
