@@ -230,7 +230,9 @@ const REPORT_TOOL: Anthropic.Tool = {
 
 export async function runAgent(input: EscalationInput, ctx: CustomerContext): Promise<AgentResult> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY is not set");
+    throw new Error(
+      "ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables, then redeploy."
+    );
   }
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -244,14 +246,34 @@ export async function runAgent(input: EscalationInput, ctx: CustomerContext): Pr
     buildContextPrompt(ctx),
   ].join("\n");
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 2000,
-    system: SYSTEM_PROMPT,
-    tools: [REPORT_TOOL],
-    tool_choice: { type: "tool", name: "report" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
+  let response;
+  try {
+    response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 2000,
+      system: SYSTEM_PROMPT,
+      tools: [REPORT_TOOL],
+      tool_choice: { type: "tool", name: "report" },
+      messages: [{ role: "user", content: userPrompt }],
+    });
+  } catch (err: any) {
+    // Convert Anthropic SDK errors into clearer, action-oriented messages.
+    const status = err?.status || err?.response?.status;
+    if (status === 401) {
+      throw new Error(
+        "Anthropic rejected the API key (401 invalid x-api-key). Update ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables → Production, then redeploy. Generate a fresh key at https://console.anthropic.com/settings/keys."
+      );
+    }
+    if (status === 402 || /credit|billing|insufficient/i.test(err?.message || "")) {
+      throw new Error(
+        "Anthropic API credit issue. Top up at https://console.anthropic.com/settings/billing, then retry."
+      );
+    }
+    if (status === 429) {
+      throw new Error("Anthropic rate-limited the request (429). Wait a moment and retry.");
+    }
+    throw err;
+  }
 
   // Find the tool_use block.
   const toolUse = response.content.find(
