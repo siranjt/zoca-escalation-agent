@@ -1,85 +1,77 @@
 // GET /api/tickets
-//   ?patterns=churn,retention_risk,subscription_support,paid_offboarding   (comma-separated, optional)
-//   ?status=open|started|completed|cancelled                                (comma-separated, optional)
-//   ?sinceDays=30                                                           (default 0 = no cutoff)
-//   ?limit=100                                                              (default 100, max 250)
 //
-// Returns Finance-team Linear tickets whose title matches the requested
-// patterns, sorted latest-first (by updatedAt desc).
+// Sources tickets from the Metabase public CSV (entity-joined Linear tickets).
+//
+//   ?classifications=Churn Ticket,Retention Risk Alert,Subscription Support Ticket,paid_user_offboarding,Subscription_Cancellation
+//   ?states=Todo,In Progress,In Review,Done,Canceled,Duplicate
+//   ?sinceDays=90      (default 0 = no time filter)
+//   ?limit=200         (default 200)
+//
+// Sorted latest-first by createdAt.
 
 import { NextRequest, NextResponse } from "next/server";
 import {
-  fetchEscalationTickets,
-  classifyPattern,
-  type LinearTicket,
-  type TitlePattern,
-} from "@/lib/linear";
+  fetchTickets,
+  ALL_CLASSIFICATIONS,
+  type TicketClassification,
+} from "@/lib/tickets";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const ALL_PATTERNS: TitlePattern[] = [
-  "churn",
-  "retention_risk",
-  "subscription_support",
-  "paid_offboarding",
-];
-
-const STATUS_TYPES = new Set([
-  "backlog",
-  "unstarted",
-  "started",
-  "completed",
-  "cancelled",
-  "triage",
+const VALID_STATES = new Set([
+  "Todo",
+  "In Progress",
+  "In Review",
+  "Done",
+  "Canceled",
+  "Duplicate",
+  "Backlog",
 ]);
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const patternsParam = (url.searchParams.get("patterns") || "").trim();
-  const statusParam = (url.searchParams.get("status") || "").trim();
+  const classParam = (url.searchParams.get("classifications") || "").trim();
+  const statesParam = (url.searchParams.get("states") || "").trim();
   const sinceDays = Number(url.searchParams.get("sinceDays") ?? "0");
-  const limit = Number(url.searchParams.get("limit") ?? "100");
+  const limit = Number(url.searchParams.get("limit") ?? "200");
 
-  const patterns: TitlePattern[] = patternsParam
-    ? patternsParam
+  const classifications: TicketClassification[] = classParam
+    ? (classParam
         .split(",")
         .map((s) => s.trim())
-        .filter((s): s is TitlePattern => (ALL_PATTERNS as string[]).includes(s))
-    : ALL_PATTERNS;
+        .filter((s): s is TicketClassification =>
+          (ALL_CLASSIFICATIONS as readonly string[]).includes(s)
+        ) as TicketClassification[])
+    : [];
 
-  const statuses = statusParam
-    ? new Set(
-        statusParam
-          .split(",")
-          .map((s) => s.trim().toLowerCase())
-          .filter((s) => STATUS_TYPES.has(s))
-      )
-    : null;
+  const states = statesParam
+    ? statesParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => VALID_STATES.has(s))
+    : [];
 
   try {
-    const all = await fetchEscalationTickets({
-      patterns,
+    const tickets = await fetchTickets({
+      classifications: classifications.length ? classifications : undefined,
+      states: states.length ? states : undefined,
       sinceDays,
-      limit: Math.max(limit, 100), // pull more, then status-filter client-side
+      limit,
     });
 
-    const filtered = statuses
-      ? all.filter((t) => statuses.has(t.state.type.toLowerCase()))
-      : all;
-
-    const limited = filtered.slice(0, limit);
-
-    const stats = computeStats(limited);
+    const byClass: Record<string, number> = {};
+    const byState: Record<string, number> = {};
+    for (const t of tickets) {
+      byClass[t.classification] = (byClass[t.classification] || 0) + 1;
+      byState[t.state] = (byState[t.state] || 0) + 1;
+    }
 
     return NextResponse.json({
       ok: true,
-      teams: ["Finance", "Customer Success"],
-      patterns,
-      sinceDays,
-      tickets: limited,
-      stats,
-      sortedBy: "updatedAt desc (latest first)",
+      tickets,
+      stats: { total: tickets.length, byClassification: byClass, byState },
+      sortedBy: "createdAt desc (latest first)",
     });
   } catch (err: any) {
     return NextResponse.json(
@@ -87,20 +79,4 @@ export async function GET(req: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-function computeStats(tickets: LinearTicket[]) {
-  const byStatus: Record<string, number> = {};
-  const byPattern: Record<string, number> = {
-    churn: 0,
-    retention_risk: 0,
-    subscription_support: 0,
-    paid_offboarding: 0,
-  };
-  for (const t of tickets) {
-    const k = t.state.type || "unknown";
-    byStatus[k] = (byStatus[k] || 0) + 1;
-    for (const p of classifyPattern(t.title)) byPattern[p]++;
-  }
-  return { total: tickets.length, byStatus, byPattern };
 }

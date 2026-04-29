@@ -38,14 +38,21 @@ interface Ticket {
   identifier: string;
   title: string;
   url: string;
-  priority: number;
-  priorityLabel: string;
+  state: string;
+  classification: string;
+  category: string;
+  churnPotentialStatus: string;
   createdAt: string;
-  updatedAt: string;
-  state: { name: string; type: string };
-  team: { id: string; name: string; key: string };
-  assignee: { name: string; email: string } | null;
-  labels: string[];
+  startedAt: string;
+  completedAt: string;
+  cancelledAt: string;
+  entityId: string;
+  customerName: string;
+  customerId: string;
+  amName: string;
+  aeName: string;
+  creatorEmail: string;
+  assigneeEmail: string;
 }
 
 interface ApiResponse {
@@ -645,11 +652,11 @@ export default function EscalationsBrowser() {
             </div>
           )}
 
-          {/* LINEAR TICKETS for this customer */}
+          {/* TICKETS for this customer (sourced from Metabase) */}
           {response.tickets && response.tickets.length > 0 && (
             <div className="rounded-2xl border border-border bg-panel p-6">
               <div className="flex items-baseline justify-between mb-3">
-                <h3 className="text-base font-medium">Linear tickets for this customer</h3>
+                <h3 className="text-base font-medium">Tickets for this customer</h3>
                 <span className="text-xs text-muted">
                   {response.tickets.length} match{response.tickets.length === 1 ? "" : "es"} · sorted latest first
                 </span>
@@ -657,33 +664,47 @@ export default function EscalationsBrowser() {
               <ul className="space-y-2">
                 {response.tickets.map((t) => {
                   const statusCls =
-                    t.state.type === "completed"
+                    t.state === "Done"
                       ? "bg-ok/15 text-ok border-ok/40"
-                      : t.state.type === "started"
+                      : t.state === "In Progress" || t.state === "In Review"
                         ? "bg-accent/15 text-accent border-accent/40"
-                        : t.state.type === "cancelled"
+                        : t.state === "Canceled" || t.state === "Duplicate"
                           ? "bg-err/15 text-err border-err/40"
                           : "bg-panel2 text-text border-border";
+                  const classCls =
+                    t.classification === "Churn Ticket"
+                      ? "bg-err/15 text-err border-err/40"
+                      : t.classification === "Retention Risk Alert"
+                        ? "bg-warn/15 text-warn border-warn/40"
+                        : t.classification === "paid_user_offboarding"
+                          ? "bg-purple-500/15 text-purple-300 border-purple-500/40"
+                          : t.classification === "Subscription Support Ticket"
+                            ? "bg-accent/15 text-accent border-accent/40"
+                            : t.classification === "Subscription_Cancellation"
+                              ? "bg-pink-500/15 text-pink-300 border-pink-500/40"
+                              : "bg-panel2 text-muted border-border";
                   return (
                     <li
                       key={t.id}
                       className="rounded-lg border border-border bg-panel2 px-3 py-2"
                     >
-                      <div className="flex items-baseline gap-2 text-xs">
-                        <span className="font-mono text-muted">{t.identifier}</span>
-                        <span
-                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${statusCls}`}
-                        >
-                          {t.state.name}
+                      <div className="flex items-baseline gap-2 text-xs flex-wrap">
+                        <span className="font-mono text-muted">{t.identifier || "—"}</span>
+                        <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${statusCls}`}>
+                          {t.state || "—"}
                         </span>
-                        <span className="text-muted">{t.team.name}</span>
-                        {t.priorityLabel && t.priorityLabel !== "No priority" && (
-                          <span className="inline-flex items-center rounded-md border border-warn/40 bg-warn/10 text-warn px-1.5 py-0.5">
-                            {t.priorityLabel}
+                        {t.classification && (
+                          <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${classCls}`}>
+                            {t.classification}
                           </span>
                         )}
-                        <span className="ml-auto text-muted" title={t.updatedAt}>
-                          {relTime(t.updatedAt)}
+                        {t.churnPotentialStatus && (
+                          <span className="inline-flex items-center rounded-md border border-warn/40 bg-warn/10 text-warn px-1.5 py-0.5">
+                            {t.churnPotentialStatus}
+                          </span>
+                        )}
+                        <span className="ml-auto text-muted" title={t.createdAt}>
+                          {relTime(t.createdAt)}
                         </span>
                       </div>
                       <div className="mt-1.5">
@@ -696,33 +717,42 @@ export default function EscalationsBrowser() {
                           {t.title}
                         </a>
                       </div>
-                      {t.assignee?.name && (
-                        <p className="mt-1 text-xs text-muted">
-                          <span className="text-muted">Assigned</span>{" "}
-                          <span className="text-text">{t.assignee.name}</span>
-                          {t.labels.length > 0 && (
-                            <>
-                              {" · "}
-                              <span className="text-muted">Labels</span> {t.labels.join(", ")}
-                            </>
-                          )}
-                        </p>
-                      )}
+                      <p className="mt-1 text-xs text-muted">
+                        {t.amName && (
+                          <>
+                            <span className="text-muted">AM</span>{" "}
+                            <span className="text-text">{t.amName}</span>
+                          </>
+                        )}
+                        {t.assigneeEmail && (
+                          <>
+                            {t.amName ? " · " : ""}
+                            <span className="text-muted">Assignee</span>{" "}
+                            <span className="text-text">{t.assigneeEmail}</span>
+                          </>
+                        )}
+                        {t.creatorEmail && (
+                          <>
+                            {(t.amName || t.assigneeEmail) ? " · " : ""}
+                            <span className="text-muted">By</span>{" "}
+                            <span className="text-text">{t.creatorEmail}</span>
+                          </>
+                        )}
+                      </p>
                     </li>
                   );
                 })}
               </ul>
               <p className="text-xs text-muted mt-3">
-                Matches by entity_id in description or business name in title — across Finance + CX
-                teams, all four escalation patterns.
+                Sourced from Metabase tickets feed — matched by entity_id, customer_id, or business
+                name. Click a title to open in Linear.
               </p>
             </div>
           )}
 
           {response.tickets && response.tickets.length === 0 && response.customer.entityId && (
             <div className="rounded-2xl border border-border bg-panel p-4 text-xs text-muted">
-              No Linear escalation tickets found for this customer (Finance + CX teams, all four
-              patterns).
+              No tickets found for this customer in the Metabase ticket feed (entity_id, customer_id, or business name).
             </div>
           )}
 

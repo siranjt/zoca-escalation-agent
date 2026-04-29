@@ -2,56 +2,56 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type TitlePattern = "churn" | "retention_risk" | "subscription_support" | "paid_offboarding";
-
 interface Ticket {
   id: string;
   identifier: string;
   title: string;
-  description: string | null;
-  priority: number;
-  priorityLabel: string;
+  description: string;
   url: string;
+  state: string;
+  classification: string;
+  category: string;
+  churnPotentialStatus: string;
   createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-  cancelledAt: string | null;
-  startedAt: string | null;
-  state: { name: string; type: string };
-  team: { id: string; name: string; key: string };
-  assignee: { name: string; email: string } | null;
-  creator: { name: string } | null;
-  labels: string[];
+  startedAt: string;
+  completedAt: string;
+  cancelledAt: string;
+  entityId: string;
+  customerName: string;
+  customerId: string;
+  amName: string;
+  aeName: string;
+  creatorEmail: string;
+  assigneeEmail: string;
 }
 
 interface ApiResponse {
   ok: boolean;
-  team?: { id: string; name: string };
-  patterns?: TitlePattern[];
-  sinceDays?: number;
   tickets?: Ticket[];
   stats?: {
     total: number;
-    byStatus: Record<string, number>;
-    byPattern: Record<string, number>;
+    byClassification: Record<string, number>;
+    byState: Record<string, number>;
   };
   sortedBy?: string;
   error?: string;
 }
 
-const PATTERNS: { key: TitlePattern; label: string; cls: string }[] = [
-  { key: "churn", label: "Churn", cls: "bg-err/15 text-err border-err/40" },
-  { key: "retention_risk", label: "Retention Risk", cls: "bg-warn/15 text-warn border-warn/40" },
-  { key: "subscription_support", label: "Subscription Support", cls: "bg-accent/15 text-accent border-accent/40" },
-  { key: "paid_offboarding", label: "Paid Offboarding", cls: "bg-purple-500/15 text-purple-300 border-purple-500/40" },
+const CLASSIFICATIONS: { key: string; label: string; cls: string }[] = [
+  { key: "Churn Ticket", label: "Churn", cls: "bg-err/15 text-err border-err/40" },
+  { key: "Retention Risk Alert", label: "Retention Risk", cls: "bg-warn/15 text-warn border-warn/40" },
+  { key: "Subscription Support Ticket", label: "Subscription Support", cls: "bg-accent/15 text-accent border-accent/40" },
+  { key: "paid_user_offboarding", label: "Paid Offboarding", cls: "bg-purple-500/15 text-purple-300 border-purple-500/40" },
+  { key: "Subscription_Cancellation", label: "Subscription Cancel", cls: "bg-pink-500/15 text-pink-300 border-pink-500/40" },
 ];
 
-const STATUS_GROUPS: { key: string; label: string; cls: string }[] = [
-  { key: "unstarted", label: "Open", cls: "bg-panel2 text-text border-border" },
-  { key: "started", label: "In Progress", cls: "bg-accent/15 text-accent border-accent/40" },
-  { key: "completed", label: "Done", cls: "bg-ok/15 text-ok border-ok/40" },
-  { key: "cancelled", label: "Cancelled", cls: "bg-err/15 text-err border-err/40" },
-  { key: "backlog", label: "Backlog", cls: "bg-panel2 text-muted border-border" },
+const STATES: { key: string; cls: string }[] = [
+  { key: "Todo", cls: "bg-panel2 text-text border-border" },
+  { key: "In Progress", cls: "bg-accent/15 text-accent border-accent/40" },
+  { key: "In Review", cls: "bg-accent/15 text-accent border-accent/40" },
+  { key: "Done", cls: "bg-ok/15 text-ok border-ok/40" },
+  { key: "Canceled", cls: "bg-err/15 text-err border-err/40" },
+  { key: "Duplicate", cls: "bg-err/15 text-err border-err/40" },
 ];
 
 const TIME_WINDOWS = [
@@ -77,24 +77,12 @@ function relTime(iso: string): string {
   return `${Math.floor(mo / 12)}y ago`;
 }
 
-function classifyPattern(title: string): TitlePattern[] {
-  const t = (title || "").toLowerCase();
-  const hits: TitlePattern[] = [];
-  if (t.includes("churn")) hits.push("churn");
-  if (t.includes("retention risk")) hits.push("retention_risk");
-  if (t.includes("subscription support") || t.includes("subsciption_support"))
-    hits.push("subscription_support");
-  if (t.includes("paid_user_offboarding") || t.includes("offboarding"))
-    hits.push("paid_offboarding");
-  return hits;
-}
-
 export default function TicketsBrowser() {
-  const [patternFilter, setPatternFilter] = useState<Set<TitlePattern>>(
-    new Set(PATTERNS.map((p) => p.key))
+  const [classFilter, setClassFilter] = useState<Set<string>>(
+    new Set(CLASSIFICATIONS.map((c) => c.key))
   );
-  const [statusFilter, setStatusFilter] = useState<Set<string>>(
-    new Set(["unstarted", "started"])
+  const [stateFilter, setStateFilter] = useState<Set<string>>(
+    new Set(["Todo", "In Progress", "In Review"])
   );
   const [sinceDays, setSinceDays] = useState("90");
   const [textFilter, setTextFilter] = useState("");
@@ -106,11 +94,11 @@ export default function TicketsBrowser() {
     setLoading(true);
     try {
       const url = new URL("/api/tickets", window.location.origin);
-      if (patternFilter.size && patternFilter.size < PATTERNS.length) {
-        url.searchParams.set("patterns", Array.from(patternFilter).join(","));
+      if (classFilter.size && classFilter.size < CLASSIFICATIONS.length) {
+        url.searchParams.set("classifications", Array.from(classFilter).join(","));
       }
       if (sinceDays !== "0") url.searchParams.set("sinceDays", sinceDays);
-      url.searchParams.set("limit", "150");
+      url.searchParams.set("limit", "300");
       const res = await fetch(url.toString());
       const text = await res.text();
       try {
@@ -134,29 +122,26 @@ export default function TicketsBrowser() {
     if (!response?.tickets) return [];
     const t = textFilter.trim().toLowerCase();
     return response.tickets.filter((tk) => {
-      // Pattern filter — keep only tickets whose title matches at least one
-      // currently-selected pattern.
-      const tickPats = classifyPattern(tk.title);
-      if (!tickPats.some((p) => patternFilter.has(p))) return false;
-      if (statusFilter.size && !statusFilter.has(tk.state.type.toLowerCase())) return false;
+      if (classFilter.size && !classFilter.has(tk.classification)) return false;
+      if (stateFilter.size && !stateFilter.has(tk.state)) return false;
       if (t) {
-        const blob = `${tk.identifier} ${tk.title} ${tk.assignee?.name || ""} ${tk.assignee?.email || ""}`.toLowerCase();
+        const blob = `${tk.identifier} ${tk.title} ${tk.customerName} ${tk.amName} ${tk.assigneeEmail}`.toLowerCase();
         if (!blob.includes(t)) return false;
       }
       return true;
     });
-  }, [response, patternFilter, statusFilter, textFilter]);
+  }, [response, classFilter, stateFilter, textFilter]);
 
-  function togglePattern(p: TitlePattern) {
-    setPatternFilter((prev) => {
+  function toggleClass(c: string) {
+    setClassFilter((prev) => {
       const next = new Set(prev);
-      if (next.has(p)) next.delete(p);
-      else next.add(p);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
       return next;
     });
   }
-  function toggleStatus(s: string) {
-    setStatusFilter((prev) => {
+  function toggleState(s: string) {
+    setStateFilter((prev) => {
       const next = new Set(prev);
       if (next.has(s)) next.delete(s);
       else next.add(s);
@@ -166,16 +151,15 @@ export default function TicketsBrowser() {
 
   return (
     <div className="space-y-6">
-      {/* CONTROLS */}
       <div className="rounded-2xl border border-border bg-panel p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
-          <p className="text-muted text-sm">Title pattern</p>
+          <p className="text-muted text-sm">Classification</p>
           <div className="flex items-center gap-3">
             <select
               className="rounded-lg border border-border bg-panel2 px-3 py-2 text-sm outline-none focus:border-accent"
               value={sinceDays}
               onChange={(e) => setSinceDays(e.target.value)}
-              title="Time window (updatedAt)"
+              title="Time window (createdAt)"
             >
               {TIME_WINDOWS.map((t) => (
                 <option key={t.key} value={t.key}>
@@ -194,38 +178,38 @@ export default function TicketsBrowser() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2 text-xs">
-          {PATTERNS.map((p) => {
-            const on = patternFilter.has(p.key);
+          {CLASSIFICATIONS.map((c) => {
+            const on = classFilter.has(c.key);
             return (
               <button
-                key={p.key}
+                key={c.key}
                 type="button"
-                onClick={() => togglePattern(p.key)}
+                onClick={() => toggleClass(c.key)}
                 className={`rounded-full border px-3 py-1 ${
-                  on ? p.cls : "border-border text-muted bg-panel2"
+                  on ? c.cls : "border-border text-muted bg-panel2"
                 }`}
               >
-                {p.label}
+                {c.label}
               </button>
             );
           })}
         </div>
 
         <div>
-          <p className="text-muted text-sm mb-2">Status</p>
+          <p className="text-muted text-sm mb-2">State</p>
           <div className="flex flex-wrap gap-2 text-xs">
-            {STATUS_GROUPS.map((s) => {
-              const on = statusFilter.has(s.key);
+            {STATES.map((s) => {
+              const on = stateFilter.has(s.key);
               return (
                 <button
                   key={s.key}
                   type="button"
-                  onClick={() => toggleStatus(s.key)}
+                  onClick={() => toggleState(s.key)}
                   className={`rounded-full border px-3 py-1 ${
                     on ? s.cls : "border-border text-muted bg-panel2"
                   }`}
                 >
-                  {s.label}
+                  {s.key}
                 </button>
               );
             })}
@@ -233,20 +217,19 @@ export default function TicketsBrowser() {
         </div>
 
         <div>
-          <p className="text-muted text-sm mb-2">Search (title / identifier / assignee)</p>
+          <p className="text-muted text-sm mb-2">Search (identifier / title / customer / AM / assignee)</p>
           <input
             className="w-full rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
-            placeholder="FIN-3901, churn, kanak…"
+            placeholder="FIN-3901, churn, lacquer, asmita…"
             value={textFilter}
             onChange={(e) => setTextFilter(e.target.value)}
           />
         </div>
       </div>
 
-      {/* STATE */}
       {loading && !response && (
         <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
-          Loading Finance tickets from Linear…
+          Loading tickets from Metabase…
         </div>
       )}
 
@@ -254,14 +237,9 @@ export default function TicketsBrowser() {
         <div className="rounded-2xl border border-err/40 bg-err/10 p-6">
           <p className="text-err font-medium">Error</p>
           <p className="text-sm mt-2 whitespace-pre-wrap">{response.error}</p>
-          <p className="text-xs text-muted mt-3">
-            Make sure <code>LINEAR_API_KEY</code> is set in Vercel → Project Settings →
-            Environment Variables, then redeploy.
-          </p>
         </div>
       )}
 
-      {/* RESULTS */}
       {response && response.ok && response.tickets && (
         <>
           {response.stats && (
@@ -270,14 +248,14 @@ export default function TicketsBrowser() {
                 <span className="text-muted mr-2">
                   {filtered.length} / {response.stats.total} tickets · sorted latest first
                 </span>
-                {PATTERNS.map((p) => {
-                  const n = response.stats!.byPattern[p.key] || 0;
+                {CLASSIFICATIONS.map((c) => {
+                  const n = response.stats!.byClassification[c.key] || 0;
                   return (
                     <span
-                      key={p.key}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${p.cls}`}
+                      key={c.key}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${c.cls}`}
                     >
-                      {p.label} <span className="font-semibold">{n}</span>
+                      {c.label} <span className="font-semibold">{n}</span>
                     </span>
                   );
                 })}
@@ -288,52 +266,39 @@ export default function TicketsBrowser() {
           <div className="rounded-2xl border border-border bg-panel p-2">
             {filtered.length === 0 ? (
               <p className="p-6 text-muted text-sm">
-                No tickets match these filters. Try widening the time window, enabling more
-                statuses, or clearing the search box.
+                No tickets match these filters. Widen the time window, enable more states, or clear search.
               </p>
             ) : (
               <ul>
                 {filtered.map((t) => {
-                  const sMeta = STATUS_GROUPS.find((s) => s.key === t.state.type.toLowerCase());
-                  const tickPats = classifyPattern(t.title);
+                  const sMeta = STATES.find((s) => s.key === t.state);
+                  const cMeta = CLASSIFICATIONS.find((c) => c.key === t.classification);
                   return (
                     <li
                       key={t.id}
                       className="border-b border-border last:border-b-0 px-4 py-3 hover:bg-panel2/50"
                     >
-                      <div className="flex items-baseline gap-2 text-xs">
-                        <span className="font-mono text-muted">{t.identifier}</span>
-                        <span
-                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${sMeta?.cls || "border-border text-muted"}`}
-                          title={`status type: ${t.state.type}`}
-                        >
-                          {sMeta?.label || t.state.name}
+                      <div className="flex items-baseline gap-2 text-xs flex-wrap">
+                        <span className="font-mono text-muted">{t.identifier || "—"}</span>
+                        <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${sMeta?.cls || "border-border text-muted"}`}>
+                          {t.state}
                         </span>
-                        {t.team?.name && (
-                          <span className="text-muted">{t.team.name}</span>
-                        )}
-                        {t.priorityLabel && t.priorityLabel !== "No priority" && (
-                          <span className="inline-flex items-center rounded-md border border-warn/40 bg-warn/10 text-warn px-1.5 py-0.5">
-                            {t.priorityLabel}
+                        {cMeta && (
+                          <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${cMeta.cls}`}>
+                            {cMeta.label}
                           </span>
                         )}
-                        {tickPats.map((p) => {
-                          const meta = PATTERNS.find((x) => x.key === p);
-                          return (
-                            <span
-                              key={p}
-                              className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${meta?.cls || ""}`}
-                            >
-                              {meta?.label}
-                            </span>
-                          );
-                        })}
-                        <span className="ml-auto text-muted" title={t.updatedAt}>
-                          {relTime(t.updatedAt)}
+                        {t.churnPotentialStatus && (
+                          <span className="inline-flex items-center rounded-md border border-warn/40 bg-warn/10 text-warn px-1.5 py-0.5">
+                            {t.churnPotentialStatus}
+                          </span>
+                        )}
+                        <span className="ml-auto text-muted" title={t.createdAt}>
+                          {relTime(t.createdAt)}
                         </span>
                       </div>
 
-                      <div className="mt-1.5 flex items-center gap-2">
+                      <div className="mt-1.5">
                         <a
                           href={t.url}
                           target="_blank"
@@ -345,26 +310,24 @@ export default function TicketsBrowser() {
                       </div>
 
                       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-                        {t.assignee?.name && (
+                        {t.customerName && (
                           <span>
-                            <span className="text-muted">Assigned</span>{" "}
-                            <span className="text-text">{t.assignee.name}</span>
+                            <span className="text-muted">Customer</span>{" "}
+                            <span className="text-text">{t.customerName}</span>
                           </span>
                         )}
-                        {t.creator?.name && (
+                        {t.amName && (
                           <span>
-                            <span className="text-muted">By</span>{" "}
-                            <span className="text-text">{t.creator.name}</span>
+                            <span className="text-muted">AM</span>{" "}
+                            <span className="text-text">{t.amName}</span>
                           </span>
                         )}
-                        {t.labels.length > 0 && (
+                        {t.assigneeEmail && (
                           <span>
-                            <span className="text-muted">Labels</span> {t.labels.join(", ")}
+                            <span className="text-muted">Assignee</span>{" "}
+                            <span className="text-text">{t.assigneeEmail}</span>
                           </span>
                         )}
-                        <span>
-                          <span className="text-muted">Created</span> {relTime(t.createdAt)}
-                        </span>
                       </div>
                     </li>
                   );

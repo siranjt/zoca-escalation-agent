@@ -84,47 +84,35 @@ async function checkChargebee(): Promise<CheckResult> {
   }
 }
 
-async function checkLinear(): Promise<CheckResult> {
-  const apiKey = (process.env.LINEAR_API_KEY || "").replace(/^['"\s]+|['"\s]+$/g, "");
-  if (!apiKey)
-    return {
-      ok: false,
-      detail: "LINEAR_API_KEY not set — /tickets and the per-customer ticket panel will be empty.",
-    };
-
+async function checkTicketsCsv(): Promise<CheckResult> {
+  // Ticket data now comes from a Metabase public CSV — no API key required.
+  // Health check verifies we can reach it and the response is non-empty.
   try {
-    const res = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: apiKey },
-      body: JSON.stringify({ query: "query { viewer { id name } }" }),
-    });
+    const res = await fetch(
+      "https://metabase.zoca.ai/public/question/331e4835-e163-4981-877e-14592f71741d.csv",
+      { method: "GET", headers: { Accept: "text/csv" }, next: { revalidate: 3600 } }
+    );
     if (!res.ok) {
-      if (res.status === 401)
-        return {
-          ok: false,
-          detail: "401 — Linear rejected the API key.",
-          hint: "Generate a new personal API key at https://linear.app/settings/api (starts with lin_api_…), paste into Vercel LINEAR_API_KEY.",
-        };
-      return { ok: false, detail: `Linear returned ${res.status}.` };
+      return { ok: false, detail: `Tickets CSV returned ${res.status}.` };
     }
-    const data = await res.json();
-    if (data.errors?.length) {
-      return { ok: false, detail: `Linear GraphQL: ${data.errors[0].message}` };
+    const text = await res.text();
+    const lines = text.split("\n").length;
+    if (lines < 2) {
+      return { ok: false, detail: "Tickets CSV came back empty." };
     }
-    const name = data.data?.viewer?.name || "(unknown)";
-    return { ok: true, detail: `Authenticated as ${name}.` };
+    return { ok: true, detail: `Reachable (~${lines} lines).` };
   } catch (err: any) {
-    return { ok: false, detail: err?.message || "Network failure to Linear." };
+    return { ok: false, detail: err?.message || "Network failure to Metabase tickets CSV." };
   }
 }
 
 export async function GET() {
-  const [anthropic, chargebee, linear] = await Promise.all([
+  const [anthropic, chargebee, tickets] = await Promise.all([
     checkAnthropic(),
     checkChargebee(),
-    checkLinear(),
+    checkTicketsCsv(),
   ]);
-  const checks = { anthropic, chargebee, linear };
-  const ok = anthropic.ok && chargebee.ok && linear.ok;
+  const checks = { anthropic, chargebee, tickets };
+  const ok = anthropic.ok && chargebee.ok && tickets.ok;
   return NextResponse.json({ ok, checks }, { status: ok ? 200 : 503 });
 }

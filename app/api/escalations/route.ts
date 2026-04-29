@@ -21,7 +21,7 @@ import {
   searchBaseSheet,
   type BaseSheetRow,
 } from "@/lib/metabase";
-import { fetchTicketsForEntity, type LinearTicket } from "@/lib/linear";
+import { fetchTicketsForCustomer, type MetabaseTicket } from "@/lib/tickets";
 import type { Channel, CommsMessage } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -147,13 +147,14 @@ export async function GET(req: NextRequest) {
         perChannelLimit,
         perChannelTimeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 25000,
       }),
-      fetchTicketsForEntity({
+      fetchTicketsForCustomer({
         entityId: primary.entity_id,
+        customerId: primary.customer_id,
         bizName: primary.bizname,
         sinceDays: 0,
-        limit: 30,
-      }).catch((err): LinearTicket[] => {
-        // Linear failure shouldn't fail the whole lookup — surface in lookupNotes.
+        limit: 50,
+      }).catch((): MetabaseTicket[] => {
+        // Tickets failure shouldn't fail the whole lookup.
         return [];
       }),
     ]);

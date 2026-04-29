@@ -13,14 +13,14 @@ interface HealthResponse {
   checks: {
     anthropic: Check;
     chargebee: Check;
-    linear: Check;
+    tickets: Check;
   };
 }
 
 const SERVICES: { key: keyof HealthResponse["checks"]; label: string; usedFor: string }[] = [
   { key: "anthropic", label: "Anthropic", usedFor: "Triage, summary, draft reply" },
   { key: "chargebee", label: "Chargebee", usedFor: "Subscription, invoices, ACH" },
-  { key: "linear", label: "Linear", usedFor: "Per-customer tickets, /tickets page" },
+  { key: "tickets", label: "Tickets CSV", usedFor: "Per-customer tickets, /tickets page" },
 ];
 
 export default function HealthBadge() {
