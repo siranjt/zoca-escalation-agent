@@ -62,11 +62,11 @@ export default function Page() {
           </p>
         </div>
         <nav className="flex gap-4 text-sm text-muted whitespace-nowrap">
-          <a href="/escalations" className="hover:text-text underline-offset-4 hover:underline">
-            History
+          <a href="/escalations" className="hover:text-text underline-offset-4 hover:underline font-medium">
+            Customer 360 →
           </a>
           <a href="/tickets" className="hover:text-text underline-offset-4 hover:underline">
-            Tickets
+            All tickets
           </a>
         </nav>
       </header>

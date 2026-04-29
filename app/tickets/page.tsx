@@ -17,8 +17,12 @@ export default function Page() {
           </p>
         </div>
         <nav className="flex gap-4 text-sm text-muted">
-          <a href="/" className="hover:text-text underline-offset-4 hover:underline">Triage</a>
-          <a href="/escalations" className="hover:text-text underline-offset-4 hover:underline">History</a>
+          <a href="/escalations" className="hover:text-text underline-offset-4 hover:underline font-medium">
+            Customer 360
+          </a>
+          <a href="/" className="hover:text-text underline-offset-4 hover:underline">
+            Triage by message
+          </a>
         </nav>
       </header>
       <TicketsBrowser />

@@ -65,6 +65,25 @@ interface ApiResponse {
   error?: string;
 }
 
+interface TriageResult {
+  severity: "P0" | "P1" | "P2" | "P3";
+  category: string;
+  ownerSuggestion: { role: string; namedPerson?: string; rationale: string };
+  summary: string;
+  draftReply: { channel: string; subject?: string; body: string };
+  autoResolvable: { eligible: boolean; confidence: number; reason: string };
+  routing: { actions: any[] };
+  signalsUsed: string[];
+}
+
+interface TriageState {
+  status: "idle" | "loading" | "ready" | "skipped" | "error";
+  sourceMessage: Comm | null;
+  result: TriageResult | null;
+  error?: string;
+  reason?: string; // when skipped
+}
+
 const CHANNELS: { key: Channel; label: string; cls: string }[] = [
   { key: "app_chat", label: "App Chat", cls: "bg-accent/15 text-accent border-accent/40" },
   { key: "email", label: "Email", cls: "bg-indigo-500/15 text-indigo-300 border-indigo-500/40" },
@@ -115,6 +134,9 @@ export default function EscalationsBrowser() {
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
 
+  // Triage state — runs as phase-2 after the customer/comms/tickets phase 1.
+  const [triage, setTriage] = useState<TriageState>({ status: "idle", sourceMessage: null, result: null });
+
   // Per-channel "retry" busy state
   const [retrying, setRetrying] = useState<Set<Channel>>(new Set());
 
@@ -128,6 +150,9 @@ export default function EscalationsBrowser() {
     if (!query.trim()) return;
     setLoading(true);
     setResponse(null);
+    setTriage({ status: "idle", sourceMessage: null, result: null });
+
+    let phase1: ApiResponse | null = null;
     try {
       const url = new URL("/api/escalations", window.location.origin);
       url.searchParams.set("q", query.trim());
@@ -135,10 +160,9 @@ export default function EscalationsBrowser() {
       const res = await fetch(url.toString());
       const text = await res.text();
       try {
-        const data = JSON.parse(text) as ApiResponse;
-        setResponse(data);
+        phase1 = JSON.parse(text) as ApiResponse;
+        setResponse(phase1);
       } catch {
-        // Non-JSON (probably an HTML 504) — surface a clear error.
         setResponse({
           ok: false,
           error:
@@ -149,6 +173,55 @@ export default function EscalationsBrowser() {
       setResponse({ ok: false, error: err?.message || "Network error" });
     } finally {
       setLoading(false);
+    }
+
+    // PHASE 2 — auto-triage the latest customer-initiated message.
+    if (phase1?.ok && phase1.customer && phase1.comms) {
+      const latestClient = phase1.comms.find((m) => m.sender === "client");
+      if (!latestClient) {
+        setTriage({
+          status: "skipped",
+          sourceMessage: null,
+          result: null,
+          reason: "No client-initiated message in this time window — nothing to triage.",
+        });
+        return;
+      }
+      setTriage({ status: "loading", sourceMessage: latestClient, result: null });
+      try {
+        const r = await fetch("/api/escalation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: latestClient.body || "(empty body)",
+            source: { medium: latestClient.channel, receivedAt: latestClient.createdAt },
+            customerHint: {
+              entityId: phase1.customer.entityId,
+              customerId: phase1.customer.customerId,
+              email: phase1.customer.email,
+              bizName: phase1.customer.bizName,
+            },
+          }),
+        });
+        const tdata = await r.json();
+        if (tdata.ok && tdata.result) {
+          setTriage({ status: "ready", sourceMessage: latestClient, result: tdata.result as TriageResult });
+        } else {
+          setTriage({
+            status: "error",
+            sourceMessage: latestClient,
+            result: null,
+            error: tdata.error || "Agent did not return a result",
+          });
+        }
+      } catch (err: any) {
+        setTriage({
+          status: "error",
+          sourceMessage: latestClient,
+          result: null,
+          error: err?.message || "Network error during triage",
+        });
+      }
     }
   }
 
@@ -409,6 +482,166 @@ export default function EscalationsBrowser() {
                 Each retry runs that channel solo with a 50s budget — usually fast once the cache
                 is warm.
               </p>
+            </div>
+          )}
+
+          {/* AUTO-TRIAGE of the latest client message */}
+          {triage.status !== "idle" && (
+            <div className="rounded-2xl border border-border bg-panel p-6">
+              <div className="flex items-baseline justify-between mb-3">
+                <h3 className="text-base font-medium">Triage of latest client message</h3>
+                {triage.result && (
+                  <span
+                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold ${
+                      triage.result.severity === "P0"
+                        ? "bg-err/20 text-err border-err/40"
+                        : triage.result.severity === "P1"
+                          ? "bg-warn/20 text-warn border-warn/40"
+                          : triage.result.severity === "P2"
+                            ? "bg-accent/20 text-accent border-accent/40"
+                            : "bg-panel2 text-muted border-border"
+                    }`}
+                  >
+                    {triage.result.severity}
+                  </span>
+                )}
+              </div>
+
+              {triage.status === "loading" && (
+                <p className="text-sm text-muted">
+                  Running the agent on this customer's most recent message
+                  {triage.sourceMessage ? ` (${triage.sourceMessage.channel}, ${relTime(triage.sourceMessage.createdAt)})…` : "…"}
+                </p>
+              )}
+
+              {triage.status === "skipped" && (
+                <p className="text-sm text-muted">{triage.reason || "No client message available."}</p>
+              )}
+
+              {triage.status === "error" && (
+                <p className="text-sm text-err">
+                  Triage failed: {triage.error}
+                </p>
+              )}
+
+              {triage.status === "ready" && triage.result && triage.sourceMessage && (
+                <div className="space-y-4 text-sm">
+                  {/* Source message */}
+                  <div className="rounded-lg border border-border bg-panel2 p-3">
+                    <div className="flex items-baseline gap-2 text-xs">
+                      <span className="text-muted">Source message ·</span>
+                      <span className="text-text capitalize">{triage.sourceMessage.channel.replace("_", " ")}</span>
+                      <span className="text-muted">·</span>
+                      <span className="text-muted" title={triage.sourceMessage.createdAt}>
+                        {relTime(triage.sourceMessage.createdAt)}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 whitespace-pre-wrap text-text">
+                      {triage.sourceMessage.body || "(empty body)"}
+                    </p>
+                  </div>
+
+                  {/* Category + owner */}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <p className="text-muted text-xs mb-1">Category</p>
+                      <p className="capitalize">{triage.result.category.replace(/_/g, " ")}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted text-xs mb-1">Suggested owner</p>
+                      <p>
+                        <span className="font-medium">
+                          {triage.result.ownerSuggestion.namedPerson || triage.result.ownerSuggestion.role}
+                        </span>
+                        {triage.result.ownerSuggestion.namedPerson ? (
+                          <span className="text-muted"> · {triage.result.ownerSuggestion.role}</span>
+                        ) : null}
+                      </p>
+                      <p className="text-xs text-muted mt-1">{triage.result.ownerSuggestion.rationale}</p>
+                    </div>
+                  </div>
+
+                  {/* Summary */}
+                  <div>
+                    <p className="text-muted text-xs mb-1">Summary</p>
+                    <p className="leading-relaxed whitespace-pre-wrap">{triage.result.summary}</p>
+                  </div>
+
+                  {/* Draft reply */}
+                  <div>
+                    <p className="text-muted text-xs mb-1">
+                      Draft reply ({triage.result.draftReply.channel}
+                      {triage.result.draftReply.subject ? ` · "${triage.result.draftReply.subject}"` : ""})
+                    </p>
+                    <pre className="text-sm leading-relaxed whitespace-pre-wrap rounded-lg border border-border bg-panel2 p-3">
+{triage.result.draftReply.body}
+                    </pre>
+                  </div>
+
+                  {/* Auto-resolve */}
+                  <div className="text-xs">
+                    <p className="text-muted mb-1">Auto-resolve</p>
+                    <p>
+                      <span
+                        className={triage.result.autoResolvable.eligible ? "text-ok font-medium" : "text-muted font-medium"}
+                      >
+                        {triage.result.autoResolvable.eligible ? "Eligible" : "Not eligible"}
+                      </span>{" "}
+                      <span className="text-muted">
+                        ({(triage.result.autoResolvable.confidence * 100).toFixed(0)}% confidence)
+                      </span>
+                    </p>
+                    <p className="text-muted mt-1">{triage.result.autoResolvable.reason}</p>
+                  </div>
+
+                  {/* Routing */}
+                  {triage.result.routing.actions.length > 0 && (
+                    <div>
+                      <p className="text-muted text-xs mb-1">Routing actions</p>
+                      <ul className="text-sm space-y-2">
+                        {triage.result.routing.actions.map((a: any, i: number) => (
+                          <li key={i} className="rounded-lg border border-border bg-panel2 p-3">
+                            <p className="text-xs uppercase text-muted">{a.type}</p>
+                            {a.type === "slack_dm" && (
+                              <p>
+                                <strong>{a.to}</strong>: {a.message}
+                              </p>
+                            )}
+                            {a.type === "slack_channel" && (
+                              <p>
+                                <strong>#{a.channel}</strong>: {a.message}
+                              </p>
+                            )}
+                            {a.type === "linear_issue" && (
+                              <>
+                                <p>
+                                  <strong>
+                                    {a.team ? `${a.team} · ` : ""}
+                                    {a.title}
+                                  </strong>
+                                </p>
+                                <p className="text-muted whitespace-pre-wrap mt-1">{a.body}</p>
+                                {a.labels?.length ? (
+                                  <p className="text-xs text-muted mt-1">labels: {a.labels.join(", ")}</p>
+                                ) : null}
+                              </>
+                            )}
+                            {a.type === "email" && (
+                              <>
+                                <p>
+                                  <strong>{a.to}</strong> — {a.subject}
+                                </p>
+                                <p className="text-muted whitespace-pre-wrap mt-1">{a.body}</p>
+                              </>
+                            )}
+                            {a.type === "noop" && <p className="text-muted">{a.reason}</p>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
