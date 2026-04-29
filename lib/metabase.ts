@@ -1,5 +1,11 @@
-// Metabase access — public CSV endpoints (no auth needed) plus a small CSV
-// parser. We deliberately avoid `papaparse` etc. to keep bundle size low.
+// Metabase access — public CSV endpoints (no auth needed).
+//
+// Production note: the comms CSVs are HUGE (the SMS feed alone is ~130 MB and
+// 1.1M rows). Buffering the whole CSV via res.text() before parsing OOMs and
+// frequently times out on Vercel. We therefore stream-parse the response,
+// and we expose a separate streamFilterCsv() that exits as soon as it has
+// `maxMatches` rows matching a predicate. The CSVs are cached at the Vercel
+// edge for 24h so the slow first request becomes a one-time tax.
 
 import type { Channel, CommsMessage } from "./types";
 
@@ -18,7 +24,7 @@ const PUBLIC = {
     "https://metabase.zoca.ai/public/question/bbaad2fb-5f9d-4249-af59-c7812851437c.csv",
 } as const;
 
-// --- Tiny CSV parser (RFC 4180-ish) -----------------------------------------
+// --- CSV parsing primitives ------------------------------------------------
 
 export function parseCsv(input: string): Record<string, string>[] {
   const rows: string[][] = [];
@@ -39,9 +45,8 @@ export function parseCsv(input: string): Record<string, string>[] {
         field += c;
       }
     } else {
-      if (c === '"') {
-        inQuotes = true;
-      } else if (c === ",") {
+      if (c === '"') inQuotes = true;
+      else if (c === ",") {
         row.push(field);
         field = "";
       } else if (c === "\n") {
@@ -56,7 +61,6 @@ export function parseCsv(input: string): Record<string, string>[] {
       }
     }
   }
-  // trailing
   if (field.length > 0 || row.length > 0) {
     row.push(field);
     rows.push(row);
@@ -76,19 +80,158 @@ export function parseCsv(input: string): Record<string, string>[] {
   return out;
 }
 
-async function fetchCsv(url: string): Promise<Record<string, string>[]> {
+// Buffered fetch — used only for the small BaseSheet (~2 MB).
+async function fetchCsv(url: string, revalidateSec = 86400): Promise<Record<string, string>[]> {
   const res = await fetch(url, {
     method: "GET",
     headers: { Accept: "text/csv" },
-    // CSVs are cached at the edge for a couple minutes to avoid hammering Metabase
-    // when many escalations come in at once.
-    next: { revalidate: 120 },
+    next: { revalidate: revalidateSec },
   });
-  if (!res.ok) {
-    throw new Error(`Metabase ${url} ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`Metabase ${url} ${res.status}`);
   const text = await res.text();
   return parseCsv(text);
+}
+
+// Streaming filter — never holds the whole CSV in memory and exits the read
+// loop the moment we have `maxMatches` rows that pass `predicate`. Returns
+// {rows, hitLimit, aborted}. `aborted` means we hit the per-call timeout.
+export async function streamFilterCsv(
+  url: string,
+  predicate: (row: Record<string, string>) => boolean,
+  maxMatches: number,
+  timeoutMs: number,
+  revalidateSec = 86400
+): Promise<{ rows: Record<string, string>[]; hitLimit: boolean; aborted: boolean }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const matches: Record<string, string>[] = [];
+  let aborted = false;
+  let hitLimit = false;
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "text/csv" },
+      signal: controller.signal,
+      next: { revalidate: revalidateSec },
+    });
+    if (!res.ok) throw new Error(`Metabase ${url} ${res.status}`);
+    if (!res.body) return { rows: [], hitLimit: false, aborted: false };
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+
+    // Stateful streaming parser — must persist across chunks.
+    let headers: string[] | null = null;
+    let row: string[] = [];
+    let field = "";
+    let inQuotes = false;
+    let buf = "";
+
+    const commitField = () => {
+      row.push(field);
+      field = "";
+    };
+    const commitRow = () => {
+      if (!headers) {
+        headers = row.map((h) => h.trim());
+      } else {
+        const obj: Record<string, string> = {};
+        for (let i = 0; i < headers.length; i++) obj[headers[i]] = row[i] ?? "";
+        // Skip blank trailing lines.
+        if (Object.values(obj).some((v) => v && v.length > 0)) {
+          if (predicate(obj)) matches.push(obj);
+        }
+      }
+      row = [];
+    };
+
+    let done = false;
+    while (!done && matches.length < maxMatches) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        // AbortController fired
+        aborted = true;
+        break;
+      }
+      done = chunk.done;
+      if (chunk.value) buf += decoder.decode(chunk.value, { stream: !done });
+
+      let i = 0;
+      let stop = false;
+      while (i < buf.length) {
+        const c = buf[i];
+        if (inQuotes) {
+          if (c === '"') {
+            // Need to peek at i+1; if that's beyond buf and we're not at EOF,
+            // wait for more data so we don't misclassify a CSV escaped "".
+            if (i + 1 >= buf.length && !done) {
+              break;
+            }
+            if (buf[i + 1] === '"') {
+              field += '"';
+              i += 2;
+            } else {
+              inQuotes = false;
+              i++;
+            }
+          } else {
+            field += c;
+            i++;
+          }
+        } else {
+          if (c === '"') {
+            inQuotes = true;
+            i++;
+          } else if (c === ",") {
+            commitField();
+            i++;
+          } else if (c === "\n") {
+            commitField();
+            commitRow();
+            i++;
+            if (matches.length >= maxMatches) {
+              hitLimit = true;
+              stop = true;
+              break;
+            }
+          } else if (c === "\r") {
+            i++;
+          } else {
+            field += c;
+            i++;
+          }
+        }
+      }
+      buf = buf.slice(i);
+
+      if (stop) break;
+      if (done) {
+        // EOF: flush any trailing partial row
+        if (field.length > 0 || row.length > 0) {
+          commitField();
+          commitRow();
+        }
+        break;
+      }
+    }
+
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
+  } catch (err: any) {
+    // Could be abort or network error; bail with whatever we have.
+    if (err?.name === "AbortError") aborted = true;
+    else throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return { rows: matches, hitLimit, aborted };
 }
 
 // --- BaseSheet (master customer reference) ---------------------------------
@@ -144,15 +287,11 @@ export async function findBaseSheetRow(opts: {
   return matches[0] || null;
 }
 
-// Lenient lookup used by the escalation-history view. Tries exact match first
-// across all id-like fields, then falls back to substring match on biz name
-// so users don't have to type "Lacquer Lounge LLC" exactly.
 export async function searchBaseSheet(query: string, limit = 10): Promise<BaseSheetRow[]> {
   const all = await fetchBaseSheet();
   const q = (query || "").trim().toLowerCase();
   if (!q) return [];
 
-  // Exact id-like matches win first.
   const exact = all.filter(
     (r) =>
       r.entity_id?.toLowerCase() === q ||
@@ -164,7 +303,6 @@ export async function searchBaseSheet(query: string, limit = 10): Promise<BaseSh
   );
   if (exact.length) return exact.slice(0, limit);
 
-  // Substring on biz name and emails.
   const fuzzy = all.filter((r) => {
     const name = (r.bizname || "").toLowerCase();
     const emails = [r.app_email, r.gbp_email, r.dct_email]
@@ -212,48 +350,109 @@ function truncate(text: string, max: number): string {
   return text.slice(0, max - 1) + "…";
 }
 
-export async function fetchCommsForEntity(entityId: string, opts?: { sinceDays?: number; perChannelLimit?: number }): Promise<CommsMessage[]> {
+export interface CommsResult {
+  messages: CommsMessage[];
+  perChannelStatus: Record<
+    Channel,
+    { fetched: number; aborted: boolean; error?: string }
+  >;
+}
+
+// Fetch a single channel for the given entity. Stream-parses + early-exits.
+export async function fetchChannelForEntity(
+  entityId: string,
+  channel: Channel,
+  opts?: { sinceDays?: number; perChannelLimit?: number; timeoutMs?: number }
+): Promise<{ messages: CommsMessage[]; aborted: boolean; error?: string }> {
   const sinceDays = opts?.sinceDays ?? 90;
-  const perChannelLimit = opts?.perChannelLimit ?? 30;
-  // sinceDays <= 0 means "no time filter" — used by the all-time history view.
+  const perChannelLimit = opts?.perChannelLimit ?? 100;
+  const timeoutMs = opts?.timeoutMs ?? 25000;
   const cutoff = sinceDays > 0 ? Date.now() - sinceDays * 24 * 3600 * 1000 : 0;
+  const fields = FIELD_OF[channel];
+
+  // Cap how many rows we accumulate. Many CSVs are sorted ASC, so we may
+  // accept all and then take the most recent N at the end.
+  const MAX_ROWS = Math.max(perChannelLimit, 500);
+
+  try {
+    const result = await streamFilterCsv(
+      URL_OF[channel],
+      (row) => {
+        if ((row[fields.entity] || "").trim() !== entityId) return false;
+        if (cutoff > 0) {
+          const t = Date.parse(row[fields.created] || "");
+          if (Number.isNaN(t) || t < cutoff) return false;
+        }
+        return true;
+      },
+      MAX_ROWS,
+      timeoutMs
+    );
+
+    const parsed: CommsMessage[] = result.rows
+      .map((r) => {
+        const t = Date.parse(r[fields.created] || "");
+        if (Number.isNaN(t)) return null;
+        const body = truncate(r[fields.body] || "", 600);
+        const senderRaw = r[fields.sender] || "";
+        const msg: CommsMessage = {
+          channel,
+          createdAt: new Date(t).toISOString(),
+          sender: classifySender(channel, senderRaw),
+          body,
+        };
+        if (fields.duration) {
+          const d = Number(r[fields.duration]);
+          if (!Number.isNaN(d)) msg.durationSec = d;
+        }
+        return msg;
+      })
+      .filter((m): m is CommsMessage => m !== null);
+
+    parsed.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    return { messages: parsed.slice(0, perChannelLimit), aborted: result.aborted };
+  } catch (err: any) {
+    return { messages: [], aborted: false, error: err?.message || "fetch failed" };
+  }
+}
+
+// Multi-channel fetch with per-channel budget + partial-results semantics.
+export async function fetchCommsForEntity(
+  entityId: string,
+  opts?: { sinceDays?: number; perChannelLimit?: number; perChannelTimeoutMs?: number }
+): Promise<CommsResult> {
   const channels: Channel[] = ["app_chat", "email", "phone", "video", "sms"];
-  const all: CommsMessage[] = [];
-  await Promise.all(
-    channels.map(async (ch) => {
-      try {
-        const rows = await fetchCsv(URL_OF[ch]);
-        const fields = FIELD_OF[ch];
-        const matches = rows.filter((r) => (r[fields.entity] || "").trim() === entityId);
-        const parsed: CommsMessage[] = matches
-          .map((r) => {
-            const createdRaw = r[fields.created] || "";
-            const t = Date.parse(createdRaw);
-            if (Number.isNaN(t)) return null;
-            if (t < cutoff) return null;
-            const body = truncate(r[fields.body] || "", 600);
-            const senderRaw = r[fields.sender] || "";
-            const msg: CommsMessage = {
-              channel: ch,
-              createdAt: new Date(t).toISOString(),
-              sender: classifySender(ch, senderRaw),
-              body,
-            };
-            if (fields.duration) {
-              const d = Number(r[fields.duration]);
-              if (!Number.isNaN(d)) msg.durationSec = d;
-            }
-            return msg;
-          })
-          .filter((m): m is CommsMessage => m !== null);
-        // most recent first, cap
-        parsed.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-        all.push(...parsed.slice(0, perChannelLimit));
-      } catch (e) {
-        // best-effort: a single CSV failing shouldn't kill the whole lookup
-      }
-    })
+  const sinceDays = opts?.sinceDays ?? 90;
+  const perChannelLimit = opts?.perChannelLimit ?? 100;
+  const timeoutMs = opts?.perChannelTimeoutMs ?? 25000;
+
+  const perChannelStatus: CommsResult["perChannelStatus"] = {
+    app_chat: { fetched: 0, aborted: false },
+    email: { fetched: 0, aborted: false },
+    phone: { fetched: 0, aborted: false },
+    video: { fetched: 0, aborted: false },
+    sms: { fetched: 0, aborted: false },
+  };
+
+  const results = await Promise.all(
+    channels.map((ch) =>
+      fetchChannelForEntity(entityId, ch, {
+        sinceDays,
+        perChannelLimit,
+        timeoutMs,
+      }).then((r) => ({ ch, ...r }))
+    )
   );
+
+  const all: CommsMessage[] = [];
+  for (const r of results) {
+    perChannelStatus[r.ch] = {
+      fetched: r.messages.length,
+      aborted: r.aborted,
+      error: r.error,
+    };
+    all.push(...r.messages);
+  }
   all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  return all;
+  return { messages: all, perChannelStatus };
 }

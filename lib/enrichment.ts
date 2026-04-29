@@ -102,8 +102,16 @@ export async function buildContext(input: EscalationInput): Promise<CustomerCont
   const invoices = await markInProgressACH(invoicesRaw);
 
   // 4. Comms history (last 90 days, all channels) — only if we have entityId.
+  // The agent endpoint runs under tighter latency than the history view, so
+  // we cap per-channel at 25 messages and 12s timeout per channel.
   const recentComms = entityId
-    ? await fetchCommsForEntity(entityId, { sinceDays: 90, perChannelLimit: 25 })
+    ? (
+        await fetchCommsForEntity(entityId, {
+          sinceDays: 90,
+          perChannelLimit: 25,
+          perChannelTimeoutMs: 12000,
+        })
+      ).messages
     : [];
 
   const ctx: CustomerContext = {

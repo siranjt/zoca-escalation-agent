@@ -1,18 +1,27 @@
 // GET /api/escalations
-//   ?q=<biz name | entity uuid | email | chargebee customer id>
-//   ?sinceDays=365   (0 or negative = no cutoff)
-//   ?perChannelLimit=500
 //
-// Returns the matched customer (from BaseSheet) plus every message they're
-// associated with across all 5 comms channels, sorted newest-first.
+// Two modes:
+//   ?q=<biz | entity | email | cb_id>                 -> resolve customer + return all 5 channels (best-effort, partial OK)
+//   ?q=<...> &channel=app_chat|email|phone|video|sms  -> fetch ONLY that channel (faster, used by the UI's progressive loader)
+//
+// Other params:
+//   sinceDays      default 365  (0 or negative = no time filter)
+//   perChannelLimit default 200
+//   timeoutMs       default 25000 ms per channel (single-channel mode raises this)
+//
+// Behaviour: stream-parses Metabase CSVs and exits early once `perChannelLimit`
+// matches are found. Channels that hit the timeout are reported in
+// `perChannelStatus.<channel>.aborted = true` rather than failing the whole
+// request — partial results are useful while we wait for the slow ones.
 
 import { NextRequest, NextResponse } from "next/server";
 import {
+  fetchChannelForEntity,
   fetchCommsForEntity,
   searchBaseSheet,
   type BaseSheetRow,
 } from "@/lib/metabase";
-import type { CommsMessage } from "@/lib/types";
+import type { Channel, CommsMessage } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -48,15 +57,29 @@ function toCard(row: BaseSheetRow): CustomerCard {
   };
 }
 
+const CHANNELS: Channel[] = ["app_chat", "email", "phone", "video", "sms"];
+
+function statsOf(comms: CommsMessage[]) {
+  const byChannel: Record<string, number> = {};
+  const bySender: Record<string, number> = {};
+  for (const m of comms) {
+    byChannel[m.channel] = (byChannel[m.channel] || 0) + 1;
+    bySender[m.sender] = (bySender[m.sender] || 0) + 1;
+  }
+  return { total: comms.length, byChannel, bySender };
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") || "").trim();
+  const channelParam = (url.searchParams.get("channel") || "").trim().toLowerCase();
   const sinceDays = Number(url.searchParams.get("sinceDays") ?? "365");
-  const perChannelLimit = Number(url.searchParams.get("perChannelLimit") ?? "500");
+  const perChannelLimit = Number(url.searchParams.get("perChannelLimit") ?? "200");
+  const timeoutMs = Number(url.searchParams.get("timeoutMs") ?? "");
 
   if (!q) {
     return NextResponse.json(
-      { ok: false, error: "Missing query. Pass ?q=<biz name | entity uuid | email | customer id>" },
+      { ok: false, error: "Missing query. Pass ?q=<biz | entity | email | cb_id>" },
       { status: 400 }
     );
   }
@@ -71,11 +94,11 @@ export async function GET(req: NextRequest) {
         customer: null,
         comms: [],
         stats: { total: 0, byChannel: {}, bySender: {} },
+        perChannelStatus: {},
         lookupNotes: ["No customer matched that search. Try a UUID, exact biz name, or an email address."],
       });
     }
 
-    // First match wins. UI gets the full list so the user can see ambiguity.
     const primary = matches[0];
     if (!primary.entity_id) {
       return NextResponse.json({
@@ -85,21 +108,53 @@ export async function GET(req: NextRequest) {
         customer: toCard(primary),
         comms: [],
         stats: { total: 0, byChannel: {}, bySender: {} },
-        lookupNotes: ["BaseSheet row found but it has no entity_id, so we can't pull comms history."],
+        perChannelStatus: {},
+        lookupNotes: ["BaseSheet row found but no entity_id, so we can't pull comms history."],
       });
     }
 
-    const comms: CommsMessage[] = await fetchCommsForEntity(primary.entity_id, {
+    // SINGLE-CHANNEL mode (used by the UI for progressive loading).
+    if (channelParam && CHANNELS.includes(channelParam as Channel)) {
+      const ch = channelParam as Channel;
+      const r = await fetchChannelForEntity(primary.entity_id, ch, {
+        sinceDays,
+        perChannelLimit,
+        timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 50000,
+      });
+      return NextResponse.json({
+        ok: true,
+        query: q,
+        matches: matches.map(toCard),
+        customer: toCard(primary),
+        channel: ch,
+        comms: r.messages,
+        stats: statsOf(r.messages),
+        perChannelStatus: { [ch]: { fetched: r.messages.length, aborted: r.aborted, error: r.error } },
+        lookupNotes:
+          matches.length > 1
+            ? [`${matches.length} BaseSheet rows matched "${q}". Showing the first.`]
+            : [],
+      });
+    }
+
+    // MULTI-CHANNEL mode (default).
+    const result = await fetchCommsForEntity(primary.entity_id, {
       sinceDays,
       perChannelLimit,
+      perChannelTimeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 25000,
     });
 
-    // Build stats.
-    const byChannel: Record<string, number> = {};
-    const bySender: Record<string, number> = {};
-    for (const m of comms) {
-      byChannel[m.channel] = (byChannel[m.channel] || 0) + 1;
-      bySender[m.sender] = (bySender[m.sender] || 0) + 1;
+    const lookupNotes: string[] = [];
+    if (matches.length > 1) {
+      lookupNotes.push(`${matches.length} BaseSheet rows matched "${q}". Showing the first; others under matches.`);
+    }
+    const aborted = (Object.entries(result.perChannelStatus) as [Channel, { aborted: boolean }][])
+      .filter(([, s]) => s.aborted)
+      .map(([ch]) => ch);
+    if (aborted.length) {
+      lookupNotes.push(
+        `Timed out fetching: ${aborted.join(", ")}. They'll be quick on the next try (cached at the edge for 24h). You can also load each channel individually using ?channel=<name>.`
+      );
     }
 
     return NextResponse.json({
@@ -107,16 +162,10 @@ export async function GET(req: NextRequest) {
       query: q,
       matches: matches.map(toCard),
       customer: toCard(primary),
-      comms,
-      stats: {
-        total: comms.length,
-        byChannel,
-        bySender,
-      },
-      lookupNotes:
-        matches.length > 1
-          ? [`${matches.length} BaseSheet rows matched "${q}". Showing the first; the others are listed under matches.`]
-          : [],
+      comms: result.messages,
+      stats: statsOf(result.messages),
+      perChannelStatus: result.perChannelStatus,
+      lookupNotes,
     });
   } catch (err: any) {
     return NextResponse.json(

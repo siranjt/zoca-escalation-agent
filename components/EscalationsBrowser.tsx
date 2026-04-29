@@ -27,6 +27,12 @@ interface CustomerCard {
   monthlyRevenue?: number;
 }
 
+interface ChannelStatus {
+  fetched: number;
+  aborted: boolean;
+  error?: string;
+}
+
 interface ApiResponse {
   ok: boolean;
   query?: string;
@@ -38,6 +44,7 @@ interface ApiResponse {
     byChannel: Record<string, number>;
     bySender: Record<string, number>;
   };
+  perChannelStatus?: Partial<Record<Channel, ChannelStatus>>;
   lookupNotes?: string[];
   error?: string;
 }
@@ -92,7 +99,10 @@ export default function EscalationsBrowser() {
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
 
-  // Filters (client-side, applied to whatever the API returned)
+  // Per-channel "retry" busy state
+  const [retrying, setRetrying] = useState<Set<Channel>>(new Set());
+
+  // Filters (client-side)
   const [channelFilter, setChannelFilter] = useState<Set<Channel>>(new Set(CHANNELS.map((c) => c.key)));
   const [senderFilter, setSenderFilter] = useState<Sender | "all">("client");
   const [textFilter, setTextFilter] = useState("");
@@ -107,12 +117,74 @@ export default function EscalationsBrowser() {
       url.searchParams.set("q", query.trim());
       url.searchParams.set("sinceDays", sinceDays);
       const res = await fetch(url.toString());
-      const data = (await res.json()) as ApiResponse;
-      setResponse(data);
+      const text = await res.text();
+      try {
+        const data = JSON.parse(text) as ApiResponse;
+        setResponse(data);
+      } catch {
+        // Non-JSON (probably an HTML 504) — surface a clear error.
+        setResponse({
+          ok: false,
+          error:
+            "The server returned a non-JSON response (likely a Vercel function timeout). Try again — the CSV cache should be primed now and the next call will be much faster. Or load each channel individually via the retry buttons.",
+        });
+      }
     } catch (err: any) {
       setResponse({ ok: false, error: err?.message || "Network error" });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function retryChannel(ch: Channel) {
+    if (!response?.customer || !response.query) return;
+    setRetrying((prev) => new Set(prev).add(ch));
+    try {
+      const url = new URL("/api/escalations", window.location.origin);
+      url.searchParams.set("q", response.customer.entityId || response.query);
+      url.searchParams.set("sinceDays", sinceDays);
+      url.searchParams.set("channel", ch);
+      const res = await fetch(url.toString());
+      const text = await res.text();
+      let data: ApiResponse;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { ok: false, error: `${ch}: still timing out — give the cache a moment.` };
+      }
+      // Merge: replace this channel's messages in the existing response.
+      setResponse((prev) => {
+        if (!prev) return prev;
+        const others = (prev.comms || []).filter((m) => m.channel !== ch);
+        const next = [...others, ...(data.comms || [])].sort((a, b) =>
+          a.createdAt < b.createdAt ? 1 : -1
+        );
+        const byChannel: Record<string, number> = {};
+        const bySender: Record<string, number> = {};
+        for (const m of next) {
+          byChannel[m.channel] = (byChannel[m.channel] || 0) + 1;
+          bySender[m.sender] = (bySender[m.sender] || 0) + 1;
+        }
+        return {
+          ...prev,
+          comms: next,
+          stats: { total: next.length, byChannel, bySender },
+          perChannelStatus: {
+            ...prev.perChannelStatus,
+            [ch]: data.perChannelStatus?.[ch] || {
+              fetched: data.comms?.length || 0,
+              aborted: false,
+              error: data.error,
+            },
+          },
+        };
+      });
+    } finally {
+      setRetrying((prev) => {
+        const next = new Set(prev);
+        next.delete(ch);
+        return next;
+      });
     }
   }
 
@@ -135,6 +207,12 @@ export default function EscalationsBrowser() {
       return next;
     });
   }
+
+  const abortedChannels: Channel[] = response?.perChannelStatus
+    ? (Object.entries(response.perChannelStatus) as [Channel, ChannelStatus][])
+        .filter(([, s]) => s?.aborted)
+        .map(([ch]) => ch)
+    : [];
 
   return (
     <div className="space-y-6">
@@ -169,19 +247,24 @@ export default function EscalationsBrowser() {
             {loading ? "Looking up…" : "Look up"}
           </button>
         </div>
+        <p className="text-xs text-muted mt-3">
+          Heads-up: the comms feeds are large (~130 MB each). The first lookup after a redeploy
+          may time out as Vercel warms its edge cache — just retry. Subsequent lookups are fast
+          for 24 hours.
+        </p>
       </form>
 
-      {/* LOADING / EMPTY / ERROR */}
       {!response && !loading && (
         <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
-          Results will appear here. Tip: substring matches work for biz names, so "lacquer" finds
-          "Lacquer Lounge LLC".
+          Results will appear here. Tip: substring matches work for biz names, so "lacquer"
+          finds "Lacquer Lounge LLC".
         </div>
       )}
 
       {loading && (
         <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
-          Fetching BaseSheet, then pulling all 5 comms feeds for that entity…
+          Streaming the 5 comms feeds for that entity. First call after a redeploy can take
+          30–60 seconds; second call is instant.
         </div>
       )}
 
@@ -196,8 +279,8 @@ export default function EscalationsBrowser() {
         <div className="rounded-2xl border border-warn/40 bg-warn/10 p-6">
           <p className="font-medium text-warn">No customer match</p>
           <p className="text-sm text-muted mt-2">
-            Couldn't find anyone in BaseSheet for "{response.query}". Try a different spelling, an
-            email, or paste the entity UUID.
+            Couldn't find anyone in BaseSheet for "{response.query}". Try a different spelling,
+            an email, or paste the entity UUID.
           </p>
         </div>
       )}
@@ -253,7 +336,6 @@ export default function EscalationsBrowser() {
               </div>
             </div>
 
-            {/* MULTI-MATCH WARNING */}
             {response.matches && response.matches.length > 1 && (
               <div className="mt-4 text-xs text-muted">
                 <p className="mb-1">{response.matches.length} matches found. Showing first; others:</p>
@@ -280,6 +362,36 @@ export default function EscalationsBrowser() {
             )}
           </div>
 
+          {/* PARTIAL-RESULTS / RETRY PER CHANNEL */}
+          {abortedChannels.length > 0 && (
+            <div className="rounded-2xl border border-warn/40 bg-warn/5 p-4">
+              <p className="text-sm text-warn font-medium mb-2">
+                {abortedChannels.length} channel{abortedChannels.length === 1 ? "" : "s"} timed out
+              </p>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {abortedChannels.map((ch) => {
+                  const meta = CHANNELS.find((c) => c.key === ch);
+                  const busy = retrying.has(ch);
+                  return (
+                    <button
+                      key={ch}
+                      type="button"
+                      onClick={() => retryChannel(ch)}
+                      disabled={busy}
+                      className={`rounded-full border px-3 py-1 ${meta?.cls || ""} disabled:opacity-50`}
+                    >
+                      {busy ? `Loading ${meta?.label}…` : `Retry ${meta?.label}`}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted mt-2">
+                Each retry runs that channel solo with a 50s budget — usually fast once the cache
+                is warm.
+              </p>
+            </div>
+          )}
+
           {/* STATS */}
           {response.stats && (
             <div className="rounded-2xl border border-border bg-panel p-6">
@@ -289,12 +401,15 @@ export default function EscalationsBrowser() {
               <div className="flex flex-wrap gap-2 text-xs">
                 {CHANNELS.map((c) => {
                   const n = response.stats!.byChannel[c.key] || 0;
+                  const aborted = response.perChannelStatus?.[c.key]?.aborted;
                   return (
                     <span
                       key={c.key}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${c.cls}`}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${c.cls} ${aborted ? "opacity-50" : ""}`}
+                      title={aborted ? "Channel timed out — retry above" : ""}
                     >
                       {c.label} <span className="font-semibold">{n}</span>
+                      {aborted ? <span className="text-warn">·timed out</span> : null}
                     </span>
                   );
                 })}
