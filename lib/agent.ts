@@ -13,6 +13,26 @@ import type { AgentResult, CustomerContext, EscalationInput } from "./types";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
+// Defensive accessor: copy-pasting into Vercel often picks up whitespace or
+// wraps the value in quotes, which Anthropic then rejects with 401.
+export function getAnthropicApiKey(): { key: string; sanitized: boolean; raw: string | undefined } {
+  const raw = process.env.ANTHROPIC_API_KEY;
+  let key = raw || "";
+  const before = key;
+  key = key.replace(/^['"\s]+|['"\s]+$/g, "");
+  return { key, sanitized: key !== before, raw };
+}
+
+export function describeKeyProblem(key: string): string | null {
+  if (!key) {
+    return "ANTHROPIC_API_KEY is empty. Add it in Vercel → Settings → Environment Variables → Production, then redeploy.";
+  }
+  if (!/^sk-ant-/.test(key)) {
+    return `ANTHROPIC_API_KEY doesn't look like an Anthropic key (real ones start with "sk-ant-"). Yours starts with "${key.slice(0, 8)}…". Generate a fresh one at https://console.anthropic.com/settings/keys.`;
+  }
+  return null;
+}
+
 function buildContextPrompt(ctx: CustomerContext): string {
   const c = ctx.customer;
   const lines: string[] = [];
@@ -229,12 +249,14 @@ const REPORT_TOOL: Anthropic.Tool = {
 };
 
 export async function runAgent(input: EscalationInput, ctx: CustomerContext): Promise<AgentResult> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      "ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables, then redeploy."
-    );
-  }
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const { key, sanitized } = getAnthropicApiKey();
+  const formatProblem = describeKeyProblem(key);
+  if (formatProblem) throw new Error(formatProblem);
+  const client = new Anthropic({ apiKey: key });
+  // If we sanitized whitespace/quotes, the call below should now succeed even
+  // if Vercel still has the dirty value; this makes the dashboard self-healing
+  // for the most common copy-paste mistake.
+  void sanitized;
 
   const userPrompt = [
     `ESCALATION (received via ${input.source?.medium ?? "unknown"}${input.source?.channelOrThread ? `, ${input.source.channelOrThread}` : ""}):`,
@@ -260,8 +282,11 @@ export async function runAgent(input: EscalationInput, ctx: CustomerContext): Pr
     // Convert Anthropic SDK errors into clearer, action-oriented messages.
     const status = err?.status || err?.response?.status;
     if (status === 401) {
+      const sanitizedNote = sanitized
+        ? " (I already stripped whitespace/quotes from your env var, but Anthropic still rejected the key — so the value itself is wrong, not just dirty.)"
+        : "";
       throw new Error(
-        "Anthropic rejected the API key (401 invalid x-api-key). Update ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables → Production, then redeploy. Generate a fresh key at https://console.anthropic.com/settings/keys."
+        `Anthropic rejected the API key (401 invalid x-api-key).${sanitizedNote} Generate a fresh key at https://console.anthropic.com/settings/keys, paste it into Vercel → Settings → Environment Variables → Production as ANTHROPIC_API_KEY (no quotes, no spaces), then click Redeploy on the latest deployment. Hit /api/health to verify before retrying.`
       );
     }
     if (status === 402 || /credit|billing|insufficient/i.test(err?.message || "")) {
