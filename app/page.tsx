@@ -1,4 +1,5 @@
 import EscalationsBrowser from "@/components/EscalationsBrowser";
+import HealthBadge from "@/components/HealthBadge";
 
 export const metadata = {
   title: "Customer 360 · Zoca Escalation Agent",
@@ -7,7 +8,7 @@ export const metadata = {
 export default function Page() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-8 flex items-end justify-between gap-4">
+      <header className="mb-6 flex items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Zoca Escalation Agent</h1>
           <p className="text-muted mt-2">
@@ -25,6 +26,9 @@ export default function Page() {
           </a>
         </nav>
       </header>
+      <div className="mb-6">
+        <HealthBadge />
+      </div>
       <EscalationsBrowser />
     </main>
   );
