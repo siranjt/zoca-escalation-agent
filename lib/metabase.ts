@@ -393,7 +393,9 @@ export async function fetchChannelForEntity(
       .map((r) => {
         const t = Date.parse(r[fields.created] || "");
         if (Number.isNaN(t)) return null;
-        const body = truncate(r[fields.body] || "", 600);
+        // Keep the full body for the UI. The agent prompt builder applies its
+        // own per-message cap so token economy isn't at risk.
+        const body = r[fields.body] || "";
         const senderRaw = r[fields.sender] || "";
         const msg: CommsMessage = {
           channel,

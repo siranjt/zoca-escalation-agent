@@ -209,6 +209,17 @@ export default function EscalationsBrowser() {
   const [senderFilter, setSenderFilter] = useState<Sender | "all">("client");
   const [textFilter, setTextFilter] = useState("");
 
+  // Which timeline rows have been clicked open. Keyed by `${day}-${index}`.
+  const [expandedComms, setExpandedComms] = useState<Set<string>>(new Set());
+  function toggleCommExpand(key: string) {
+    setExpandedComms((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   // "/" shortcut focuses the search input.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1019,36 +1030,85 @@ export default function EscalationsBrowser() {
                       <div className="px-5 py-2 text-[10px] uppercase tracking-wider text-muted bg-panel2 border-y border-border font-bold">
                         {day}
                       </div>
-                      {items.map((m, i) => (
-                        <div
-                          key={`${day}-${i}`}
-                          className="severity-bar row-divider row-hover px-5 py-3"
-                          style={{ ["--bar" as any]: CHANNEL_COLORS[m.channel] || "#838d9d" }}
-                        >
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="text-muted">{CHANNEL_LABELS[m.channel] || m.channel}</span>
-                            <span className="text-muted">·</span>
-                            <span
-                              className={
-                                m.sender === "client"
-                                  ? "text-brand font-medium"
-                                  : m.sender === "team"
-                                    ? "text-ok font-medium"
-                                    : "text-muted"
+                      {items.map((m, i) => {
+                        const key = `${day}-${i}-${m.createdAt}`;
+                        const expanded = expandedComms.has(key);
+                        const long = (m.body || "").length > 280;
+                        return (
+                          <div
+                            key={key}
+                            className="severity-bar row-divider row-hover px-5 py-3 cursor-pointer transition-all"
+                            style={{ ["--bar" as any]: CHANNEL_COLORS[m.channel] || "#838d9d" }}
+                            onClick={() => toggleCommExpand(key)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                toggleCommExpand(key);
                               }
-                            >
-                              {m.sender}
-                            </span>
-                            {m.durationSec ? (
-                              <span className="text-muted">· {fmtDuration(m.durationSec)}</span>
-                            ) : null}
-                            <span className="ml-auto text-muted" title={m.createdAt}>
-                              {relTime(m.createdAt)} ago
-                            </span>
+                            }}
+                          >
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="text-muted">{CHANNEL_LABELS[m.channel] || m.channel}</span>
+                              <span className="text-muted">·</span>
+                              <span
+                                className={
+                                  m.sender === "client"
+                                    ? "text-brand font-medium"
+                                    : m.sender === "team"
+                                      ? "text-ok font-medium"
+                                      : "text-muted"
+                                }
+                              >
+                                {m.sender}
+                              </span>
+                              {m.durationSec ? (
+                                <span className="text-muted">· {fmtDuration(m.durationSec)}</span>
+                              ) : null}
+                              <span className="ml-auto text-muted" title={m.createdAt}>
+                                {relTime(m.createdAt)} ago
+                              </span>
+                            </div>
+                            <div className="relative mt-1">
+                              <p
+                                className={`text-[14px] whitespace-pre-wrap leading-relaxed ${
+                                  expanded ? "" : "line-clamp-3"
+                                }`}
+                              >
+                                {m.body || "(no body)"}
+                              </p>
+                              {long && !expanded && (
+                                <div
+                                  className="pointer-events-none absolute bottom-0 left-0 right-0 h-6"
+                                  style={{
+                                    background: "linear-gradient(to bottom, rgba(255,255,255,0), #ffffff)",
+                                  }}
+                                />
+                              )}
+                            </div>
+                            {long && (
+                              <div className="mt-1.5 flex items-center gap-3">
+                                <span className="text-[11px] text-cobalt font-medium">
+                                  {expanded ? "Show less ↑" : "Show full message ↓"}
+                                </span>
+                                {expanded && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigator.clipboard?.writeText(m.body || "");
+                                    }}
+                                    className="text-[11px] text-muted hover:text-text"
+                                  >
+                                    Copy
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <p className="text-[14px] mt-1 whitespace-pre-wrap leading-relaxed">{m.body || "(no body)"}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ))
                 )}

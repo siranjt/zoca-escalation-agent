@@ -74,11 +74,12 @@ function buildContextPrompt(ctx: CustomerContext): string {
   if (ctx.recentComms.length) {
     lines.push("");
     lines.push("RECENT COMMUNICATIONS (most recent first, last 90 days, capped)");
-    // cap to keep tokens bounded
+    // Cap to keep tokens bounded — both message count and per-message length.
     const capped = ctx.recentComms.slice(0, 60);
+    const truncBody = (s: string, max = 600) => (s && s.length > max ? s.slice(0, max - 1) + "…" : s || "");
     for (const m of capped) {
       const dur = m.durationSec ? ` (${m.durationSec}s)` : "";
-      lines.push(`  [${m.createdAt}] ${m.channel}${dur} ${m.sender}: ${m.body}`);
+      lines.push(`  [${m.createdAt}] ${m.channel}${dur} ${m.sender}: ${truncBody(m.body)}`);
     }
   } else {
     lines.push("");
