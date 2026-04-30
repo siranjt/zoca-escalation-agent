@@ -315,11 +315,35 @@ export async function searchBaseSheet(query: string, limit = 10): Promise<BaseSh
 
 // --- Communications --------------------------------------------------------
 
-const FIELD_OF: Record<Channel, { created: string; sender: string; body: string; entity: string; duration?: string }> = {
-  app_chat: { created: "Created At", sender: "Sender", body: "Message Body", entity: "Entity ID" },
+const FIELD_OF: Record<
+  Channel,
+  { created: string; sender: string; body: string; entity: string; duration?: string; memberType?: string; organizer?: string }
+> = {
+  app_chat: {
+    created: "Created At",
+    sender: "Sender",
+    body: "Message Body",
+    entity: "Entity ID",
+    // App Chat has a separate column that distinguishes "User" (client) from
+    // "Team Member" (Zoca staff). The Sender field holds the person's name.
+    memberType: "Member Type",
+  },
   email: { created: "Created At", sender: "Sender", body: "Message Body", entity: "Entity ID" },
-  phone: { created: "Created At", sender: "Sender", body: "Message Body", entity: "Entity ID", duration: "Call Duration" },
-  video: { created: "Created At", sender: "Sender", body: "Source", entity: "Entity ID", duration: "Duration" },
+  phone: {
+    created: "Created At",
+    sender: "Sender",
+    body: "Message Body",
+    entity: "Entity ID",
+    duration: "Call Duration",
+  },
+  video: {
+    created: "Created At",
+    sender: "Sender",
+    body: "Source",
+    entity: "Entity ID",
+    duration: "Duration",
+    organizer: "Organizer Email",
+  },
   sms: { created: "Created At", sender: "Sender", body: "Message Body", entity: "Entity ID" },
 };
 
@@ -331,17 +355,73 @@ const URL_OF: Record<Channel, string> = {
   sms: PUBLIC.sms,
 };
 
-function classifySender(channel: Channel, raw: string): "client" | "team" | "unknown" {
-  const s = (raw || "").trim().toLowerCase();
-  if (!s) return "unknown";
-  if (channel === "email") {
-    if (s.includes("received_by_client") || s.includes("by_client") || s === "user") return "client";
-    if (s.includes("sent_by_team") || s.includes("team")) return "team";
+// Sender classification by channel — verified against real CSV data:
+//
+//   email + sms  : Sent_By_Client (client) | Received_By_Client (team)
+//   phone        : Initiated_By_Client (client) | Initiated_By_Us (team)
+//   app_chat     : Member Type column distinguishes; Sender column holds the
+//                  person's display name. "User" = client, "Team Member" = team,
+//                  "Assistant" = team (bot replies count as team).
+//   video        : Sender column is always "Video Call - no sender". We rely
+//                  on Organizer Email — *@zoca.com = team-organized, otherwise
+//                  client-organized.
+function classifySender(
+  channel: Channel,
+  raw: string,
+  memberType?: string,
+  organizer?: string
+): "client" | "team" | "unknown" {
+  const sl = (raw || "").trim().toLowerCase();
+  const ml = (memberType || "").trim().toLowerCase();
+  const ol = (organizer || "").trim().toLowerCase();
+
+  if (channel === "app_chat") {
+    if (ml === "user") return "client";
+    if (ml === "team member" || ml === "assistant") return "team";
+    // Fallback: substring match on sender if Member Type is missing
+    if (sl === "user" || sl === "client") return "client";
     return "unknown";
   }
-  if (s === "user" || s === "client") return "client";
-  if (s.includes("team")) return "team";
+
+  if (channel === "email" || channel === "sms") {
+    if (sl === "sent_by_client") return "client";
+    if (sl === "received_by_client") return "team";
+    return "unknown";
+  }
+
+  if (channel === "phone") {
+    if (sl === "initiated_by_us" || sl === "initiated_by_zoca") return "team";
+    if (sl === "initiated_by_client") return "client";
+    return "unknown";
+  }
+
+  if (channel === "video") {
+    if (ol.endsWith("@zoca.com") || ol.includes("@zoca.")) return "team";
+    if (ol.includes("@")) return "client";
+    return "unknown";
+  }
+
   return "unknown";
+}
+
+// Display label for the sender — the actual person/role name when available.
+// App Chat has real names; other channels just have the directional encoding.
+function senderLabelFor(
+  channel: Channel,
+  raw: string,
+  memberType: string | undefined,
+  organizer: string | undefined,
+  classified: "client" | "team" | "unknown"
+): string | undefined {
+  const r = (raw || "").trim();
+  if (channel === "app_chat") {
+    return r || undefined;
+  }
+  if (channel === "video") {
+    return organizer || undefined;
+  }
+  // Email / SMS / Phone — directional values aren't useful as labels.
+  return undefined;
 }
 
 function truncate(text: string, max: number): string {
@@ -397,10 +477,15 @@ export async function fetchChannelForEntity(
         // own per-message cap so token economy isn't at risk.
         const body = r[fields.body] || "";
         const senderRaw = r[fields.sender] || "";
+        const memberType = fields.memberType ? r[fields.memberType] : undefined;
+        const organizer = fields.organizer ? r[fields.organizer] : undefined;
+        const sender = classifySender(channel, senderRaw, memberType, organizer);
+        const senderLabel = senderLabelFor(channel, senderRaw, memberType, organizer, sender);
         const msg: CommsMessage = {
           channel,
           createdAt: new Date(t).toISOString(),
-          sender: classifySender(channel, senderRaw),
+          sender,
+          senderLabel,
           body,
         };
         if (fields.duration) {

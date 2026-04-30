@@ -6,8 +6,12 @@ export interface CommsMessage {
   channel: Channel;
   createdAt: string; // ISO
   sender: "client" | "team" | "unknown";
-  body: string; // truncated for token economy
-  durationSec?: number; // phone / video
+  // Display name when available — App Chat has real person names ("Bikash
+  // Mishra", "Zoca Support"), Video has the organizer email. Email / SMS /
+  // Phone don't carry a per-message display label, so this stays undefined.
+  senderLabel?: string;
+  body: string;
+  durationSec?: number;
 }
 
 export interface Customer {

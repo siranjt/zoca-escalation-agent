@@ -22,6 +22,7 @@ interface Comm {
   channel: Channel;
   createdAt: string;
   sender: Sender;
+  senderLabel?: string;
   body: string;
   durationSec?: number;
 }
@@ -1063,6 +1064,12 @@ export default function EscalationsBrowser() {
                               >
                                 {m.sender}
                               </span>
+                              {m.senderLabel && (
+                                <>
+                                  <span className="text-muted">·</span>
+                                  <span className="text-text font-medium">{m.senderLabel}</span>
+                                </>
+                              )}
                               {m.durationSec ? (
                                 <span className="text-muted">· {fmtDuration(m.durationSec)}</span>
                               ) : null}
