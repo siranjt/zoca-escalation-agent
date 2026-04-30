@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CommsActivityChart from "./charts/CommsActivityChart";
 import ChannelMixDonut from "./charts/ChannelMixDonut";
 import TicketsClassificationDonut from "./charts/TicketsClassificationDonut";
@@ -40,11 +40,7 @@ interface CustomerCard {
   monthlyRevenue?: number;
 }
 
-interface ChannelStatus {
-  fetched: number;
-  aborted: boolean;
-  error?: string;
-}
+interface ChannelStatus { fetched: number; aborted: boolean; error?: string; }
 
 interface Ticket {
   id: string;
@@ -74,11 +70,7 @@ interface ApiResponse {
   matches?: CustomerCard[];
   customer?: CustomerCard | null;
   comms?: Comm[];
-  stats?: {
-    total: number;
-    byChannel: Record<string, number>;
-    bySender: Record<string, number>;
-  };
+  stats?: { total: number; byChannel: Record<string, number>; bySender: Record<string, number>; };
   perChannelStatus?: Partial<Record<Channel, ChannelStatus>>;
   tickets?: Ticket[];
   skippedComms?: boolean;
@@ -118,10 +110,10 @@ type Tab = "triage" | "tickets" | "history";
 const CHANNELS: Channel[] = ["app_chat", "email", "phone", "video", "sms"];
 
 const SEVERITY: Record<string, { bar: string; chip: string }> = {
-  P0: { bar: "#ef5b5b", chip: "bg-errSoft text-err border-err/40" },
-  P1: { bar: "#ef5b5b", chip: "bg-errSoft text-err border-err/40" },
-  P2: { bar: "#5b8cff", chip: "bg-accentSoft text-accent border-accent/40" },
-  P3: { bar: "#7e8794", chip: "bg-panel2 text-muted border-border" },
+  P0: { bar: "#ef4444", chip: "bg-errSoft text-err border-err/30" },
+  P1: { bar: "#ef4444", chip: "bg-errSoft text-err border-err/30" },
+  P2: { bar: "#3b5bff", chip: "bg-cobaltSoft text-cobalt border-cobalt/30" },
+  P3: { bar: "#838d9d", chip: "bg-panel2 text-muted2 border-border" },
 };
 
 const TIME_WINDOWS: { key: string; label: string; days: number }[] = [
@@ -179,10 +171,24 @@ function fmtDuration(sec?: number): string {
   return m ? `${m}m ${s}s` : `${s}s`;
 }
 
-function initials(name: string): string {
-  if (!name) return "?";
-  const parts = name.trim().split(/\s+/);
-  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || name[0].toUpperCase();
+// Animated counter — small client-side count-up for stat numbers.
+function useCountUp(target: number, durationMs = 700): number {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    if (!Number.isFinite(target)) { setV(0); return; }
+    const start = performance.now();
+    const initial = 0;
+    let raf = 0;
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / durationMs);
+      const ease = 1 - Math.pow(1 - p, 3);
+      setV(Math.round(initial + (target - initial) * ease));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, durationMs]);
+  return v;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -197,13 +203,24 @@ export default function EscalationsBrowser() {
   const [retrying, setRetrying] = useState<Set<Channel>>(new Set());
   const [tab, setTab] = useState<Tab>("triage");
 
-  // Chart filters (interactive drill-down)
   const [chartChannelFilter, setChartChannelFilter] = useState<string | null>(null);
   const [chartClassFilter, setChartClassFilter] = useState<string | null>(null);
 
-  // History filters
   const [senderFilter, setSenderFilter] = useState<Sender | "all">("client");
   const [textFilter, setTextFilter] = useState("");
+
+  // "/" shortcut focuses the search input.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        const el = document.getElementById("c360-search-input") as HTMLInputElement | null;
+        el?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   async function lookup(e: React.FormEvent) {
     e.preventDefault();
@@ -308,20 +325,10 @@ export default function EscalationsBrowser() {
       if (tdata.ok && tdata.result) {
         setTriage({ status: "ready", sourceMessage: latestClient, result: tdata.result as TriageResult });
       } else {
-        setTriage({
-          status: "error",
-          sourceMessage: latestClient,
-          result: null,
-          error: tdata.error || "Agent did not return a result",
-        });
+        setTriage({ status: "error", sourceMessage: latestClient, result: null, error: tdata.error || "Agent did not return a result" });
       }
     } catch (err: any) {
-      setTriage({
-        status: "error",
-        sourceMessage: latestClient,
-        result: null,
-        error: err?.message || "Network error during triage",
-      });
+      setTriage({ status: "error", sourceMessage: latestClient, result: null, error: err?.message || "Network error during triage" });
     }
   }
 
@@ -376,8 +383,6 @@ export default function EscalationsBrowser() {
     }
   }
 
-  // ── Filtering ──────────────────────────────────────────────────────────
-
   const filteredComms = useMemo(() => {
     if (!response?.comms) return [];
     const t = textFilter.trim().toLowerCase();
@@ -412,7 +417,6 @@ export default function EscalationsBrowser() {
     response?.tickets?.filter((t) =>
       ["Todo", "In Progress", "In Review"].includes(t.state)
     ).length ?? 0;
-
   const last30Comms = useMemo(() => {
     if (!response?.comms) return 0;
     const cut = Date.now() - 30 * 86400000;
@@ -427,47 +431,45 @@ export default function EscalationsBrowser() {
         .map(([ch]) => ch)
     : [];
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  const ticketsAnimated = useCountUp(ticketCount);
+  const last30Animated = useCountUp(last30Comms);
+  const autoConfPct = triage.result?.autoResolvable.confidence ?? 0;
+  const autoAnimated = useCountUp(Math.round(autoConfPct * 100));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* HERO */}
-      <div className="text-center pt-6">
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-brand/25 bg-panel/60 text-xs text-muted2">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand shadow-[0_0_12px_rgba(255,168,205,0.7)]" />
+      <section className="text-center pt-2">
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-cobalt/20 bg-cobaltSoft text-xs font-semibold uppercase tracking-wider text-cobalt">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-cobalt live-dot" />
           Customer Success · live from Chargebee + Metabase
         </div>
-        <h1 className="mt-4 font-extrabold text-[44px] leading-[1.05] tracking-[-0.035em]">
-          Customer <span className="brand-gradient-text relative inline-block">360<span className="absolute -top-3 -right-5 text-[18px] text-brand">✦</span></span>
+        <h1 className="mt-5 font-extrabold text-[56px] leading-[1.0] tracking-[-0.04em] text-text">
+          Customer <span className="brand-gradient-text">360</span> Agent
         </h1>
-        <p className="mt-4 max-w-[560px] mx-auto text-sm text-muted2 leading-relaxed">
-          Search by business name or entity_id. One search returns triage of their latest message,
-          all related Linear tickets, and the full comms timeline across App Chat, Email, Phone,
-          Video, and SMS.
+        <p className="mt-5 max-w-[580px] mx-auto text-[15px] text-muted2 leading-[1.65]">
+          One search returns triage of their latest message, all related Linear tickets, and the
+          full 5-channel comms timeline.
         </p>
-        <div className="mt-4 flex justify-center gap-5 text-xs text-muted2">
-          <span className="flex items-center gap-1"><span className="text-brand">✦</span> Auto-triage</span>
-          <span className="flex items-center gap-1"><span className="text-brand">✦</span> Finance + CX tickets</span>
-          <span className="flex items-center gap-1"><span className="text-brand">✦</span> 5-channel comms</span>
-        </div>
-      </div>
+      </section>
 
-      {/* SEARCH PILL */}
+      {/* SEARCH */}
       <form onSubmit={lookup} className="flex justify-center">
         <div
-          className="flex items-center gap-3 pl-5 pr-2 py-2 rounded-full border border-border2 bg-panel/70 w-full max-w-[640px]"
-          style={{ boxShadow: "0 0 0 1px rgba(255,168,205,0.05), 0 0 40px -16px rgba(255,168,205,0.3)" }}
+          className="flex items-center gap-3 pl-6 pr-2 py-2 rounded-full border border-border2 bg-panel w-full max-w-[640px]"
+          style={{ boxShadow: "0 1px 2px rgba(13, 17, 23, 0.04)" }}
         >
           <span className="text-[10px] uppercase tracking-wider font-bold text-muted">Search</span>
           <input
-            className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted"
+            id="c360-search-input"
+            className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-muted"
             placeholder="Business name, entity_id, email, or Chargebee customer id"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
           />
           <select
-            className="bg-transparent text-xs text-muted outline-none cursor-pointer"
+            className="bg-transparent text-xs text-muted2 outline-none cursor-pointer"
             value={sinceDays}
             onChange={(e) => setSinceDays(e.target.value)}
           >
@@ -478,82 +480,83 @@ export default function EscalationsBrowser() {
           <button
             type="submit"
             disabled={loading || !query.trim()}
-            className="rounded-full bg-brand text-[#2a0d1c] font-semibold px-5 py-2 text-sm disabled:opacity-50"
-            style={{ boxShadow: "0 0 30px -8px rgba(255,168,205,0.5)" }}
+            className="rounded-full bg-cobalt text-white font-semibold px-6 py-2.5 text-[13px] disabled:opacity-50 transition-all hover:-translate-y-0.5"
+            style={{ boxShadow: "0 4px 14px -4px rgba(59,91,255,0.4)" }}
           >
-            {loading ? "Looking up…" : "Look up"}
+            {loading ? "Looking up…" : "Generate →"}
           </button>
         </div>
       </form>
+      <p className="text-center text-xs text-muted -mt-4">
+        Press{" "}
+        <kbd className="font-mono px-1.5 py-0.5 rounded border border-border bg-panel2 text-muted2 text-[10px]">/</kbd>{" "}
+        to focus
+      </p>
 
-      {/* ERROR */}
+      {/* ERROR / NO MATCH */}
       {response && response.ok === false && (
-        <div className="rounded-xl border border-err/40 bg-err/10 p-4 text-sm">
-          <p className="text-err font-medium">Lookup failed</p>
+        <div className="rounded-xl border border-err/30 bg-errSoft p-4 text-sm fade-in-up">
+          <p className="text-err font-semibold">Lookup failed</p>
           <p className="text-muted2 mt-1">{response.error}</p>
         </div>
       )}
-
-      {/* NO MATCH */}
       {response && response.ok && !response.customer && (
-        <div className="rounded-xl border border-warn/40 bg-warn/10 p-4 text-sm">
-          <p className="text-warn font-medium">No customer match for &quot;{response.query}&quot;</p>
+        <div className="rounded-xl border border-warn/30 bg-warnSoft p-4 text-sm fade-in-up">
+          <p className="text-warn font-semibold">No customer match for &quot;{response.query}&quot;</p>
           <p className="text-muted2 mt-1">Try a UUID, exact biz name, an email, or the Chargebee customer id.</p>
         </div>
       )}
 
-      {/* HERO CUSTOMER CARD */}
       {response && response.ok && response.customer && (
         <>
-          <div
-            className="rounded-2xl p-7 border"
+          {/* CUSTOMER CARD */}
+          <section
+            className="rounded-2xl border border-border p-8 fade-in-up"
             style={{
-              borderColor: "rgba(78,101,255,0.25)",
-              background:
-                "linear-gradient(135deg, rgba(78,101,255,0.18) 0%, rgba(255,168,205,0.10) 60%, rgba(20,15,30,0.4) 100%)",
+              background: "linear-gradient(120deg, #f7f8ff 0%, #fff5fa 100%)",
             }}
           >
-            <div className="flex items-start justify-between gap-6">
+            <div className="flex items-start justify-between gap-8">
               <div className="min-w-0">
-                <div className="text-[10px] uppercase tracking-wider font-bold text-muted mb-2">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-cobalt mb-2">
                   ● Customer · live
                 </div>
-                <div className="text-[36px] md:text-[40px] font-extrabold tracking-[-0.025em] leading-[1.05] truncate">
+                <div className="text-[38px] font-extrabold tracking-[-0.025em] leading-[1.0] truncate">
                   {response.customer.bizName || "(no name)"}
                 </div>
-                <div className="text-sm text-muted2 mt-2 truncate">
+                <div className="text-[14px] text-muted2 mt-2.5 truncate">
                   {response.customer.email || "—"}
                   {response.customer.phone ? ` · ${response.customer.phone}` : ""}
                 </div>
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted">
+                <div className="flex flex-wrap gap-x-5 gap-y-1.5 mt-3.5 text-[13px] text-muted">
                   {response.customer.amName && (
-                    <span>AM <span className="text-text">{response.customer.amName}</span></span>
+                    <span>AM <span className="text-text font-medium">{response.customer.amName}</span></span>
                   )}
                   {response.customer.spName && (
-                    <span>SP <span className="text-text">{response.customer.spName}</span></span>
+                    <span>SP <span className="text-text font-medium">{response.customer.spName}</span></span>
                   )}
                   {response.customer.aeName && (
-                    <span>AE <span className="text-text">{response.customer.aeName}</span></span>
+                    <span>AE <span className="text-text font-medium">{response.customer.aeName}</span></span>
                   )}
                 </div>
-                <div className="text-[10px] text-muted/70 mt-2 font-mono truncate">
+                <div className="text-[10px] text-muted/80 mt-2 font-mono truncate">
                   {response.customer.entityId || "—"}
                 </div>
               </div>
-              <div className="text-right shrink-0">
-                <div className="text-[10px] uppercase tracking-wider font-bold text-muted">MRR</div>
-                <div className="text-[36px] md:text-[40px] font-extrabold tracking-[-0.025em] leading-[1.05]">
+              <div className="text-right shrink-0 pl-8 border-l border-border">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-muted mb-1.5">MRR</div>
+                <div className="text-[38px] font-extrabold tracking-[-0.025em] leading-[1.0]">
                   {typeof response.customer.monthlyRevenue === "number"
                     ? `$${response.customer.monthlyRevenue.toFixed(0)}`
                     : "—"}
                 </div>
                 {response.customer.status && (
                   <div
-                    className={`inline-flex items-center gap-1 mt-2 text-xs font-medium rounded-full border px-2 py-0.5 ${
+                    className={`inline-flex items-center gap-1.5 mt-2.5 text-xs font-medium rounded-full border px-2.5 py-1 ${
                       response.customer.status === "ZOCA" || response.customer.status === "active"
-                        ? "border-ok/40 bg-okSoft text-ok"
+                        ? "border-ok/30 bg-okSoft text-ok"
                         : response.customer.status === "CHURNED"
-                          ? "border-err/40 bg-errSoft text-err"
+                          ? "border-err/30 bg-errSoft text-err"
                           : "border-border bg-panel2 text-muted2"
                     }`}
                   >
@@ -563,17 +566,67 @@ export default function EscalationsBrowser() {
                 )}
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* CHARTS GRID */}
-          <div className="grid grid-cols-1 lg:grid-cols-[1.7fr_1fr] gap-3">
-            <div className="rounded-xl border border-border bg-panel p-4">
-              <CommsActivityChart
-                comms={(response.comms || []) as any}
-                sinceDays={sinceDaysNum}
-              />
+          {/* STAT TILES */}
+          <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <StatTile
+              label="Tickets"
+              value={String(ticketsAnimated)}
+              sub={ticketCount > 0 ? `${openTicketCount} open · ${ticketCount - openTicketCount} closed` : "—"}
+              accent="#3b5bff"
+            />
+            <StatTile
+              label="Comms · 30d"
+              value={String(last30Animated)}
+              sub={
+                response.stats
+                  ? `${response.stats.bySender.client || 0} client · ${response.stats.bySender.team || 0} team`
+                  : commsState.status === "loading"
+                    ? "loading…"
+                    : "—"
+              }
+              accent="#ff5aa0"
+            />
+            <StatTile
+              label="Severity"
+              value={triage.result?.severity || "—"}
+              sub={
+                triage.result?.category
+                  ? triage.result.category.replace(/_/g, " ")
+                  : triage.status === "loading"
+                    ? "triaging…"
+                    : "—"
+              }
+              accent={SEVERITY[triage.result?.severity || "P3"]?.bar || "#838d9d"}
+              valueCls={
+                triage.result?.severity === "P0" || triage.result?.severity === "P1"
+                  ? "text-err"
+                  : triage.result?.severity === "P2"
+                    ? "text-cobalt"
+                    : "text-text"
+              }
+            />
+            <StatTile
+              label="Auto-resolve"
+              value={triage.result ? `${autoAnimated}%` : "—"}
+              sub={
+                triage.result?.autoResolvable.eligible
+                  ? "Eligible · auto-send OK"
+                  : triage.result
+                    ? "Below 85 · human review"
+                    : "—"
+              }
+              accent="#838d9d"
+            />
+          </section>
+
+          {/* CHARTS */}
+          <section className="grid grid-cols-1 lg:grid-cols-[1.7fr_1fr] gap-3.5">
+            <div className="rounded-2xl border border-border bg-panel p-6 card-hover">
+              <CommsActivityChart comms={(response.comms || []) as any} sinceDays={sinceDaysNum} />
             </div>
-            <div className="rounded-xl border border-border bg-panel p-4">
+            <div className="rounded-2xl border border-border bg-panel p-6 card-hover">
               <ChannelMixDonut
                 comms={(response.comms || []) as any}
                 sinceDays={sinceDaysNum}
@@ -584,10 +637,10 @@ export default function EscalationsBrowser() {
                 }}
               />
             </div>
-          </div>
+          </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div className="rounded-xl border border-border bg-panel p-4">
+          <section className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+            <div className="rounded-2xl border border-border bg-panel p-6 card-hover">
               <TicketsClassificationDonut
                 tickets={(response.tickets || []) as any}
                 selected={chartClassFilter}
@@ -597,80 +650,75 @@ export default function EscalationsBrowser() {
                 }}
               />
             </div>
-            <div className="rounded-xl border border-border bg-panel p-4">
+            <div className="rounded-2xl border border-border bg-panel p-6 card-hover">
               <TicketsOverTimeChart tickets={(response.tickets || []) as any} weeks={12} />
             </div>
-            <ResponseHealthCard
-              comms={(response.comms || []) as any}
-              autoResolveConfidence={triage.result?.autoResolvable.confidence ?? null}
-            />
-          </div>
+            <div className="card-hover">
+              <ResponseHealthCard
+                comms={(response.comms || []) as any}
+                autoResolveConfidence={triage.result?.autoResolvable.confidence ?? null}
+              />
+            </div>
+          </section>
 
           {/* SECTION TABS */}
-          <div className="flex items-center gap-1 p-1 rounded-full bg-panel border border-border w-fit">
-            <TabBtn active={tab === "triage"} onClick={() => setTab("triage")}>
-              Triage
-              {triage.status === "ready" && triage.result && (
-                <span className={`ml-2 text-[10px] rounded-md border px-1.5 py-0 ${SEVERITY[triage.result.severity]?.chip || ""}`}>
-                  {triage.result.severity}
-                </span>
-              )}
-              {triage.status === "loading" && <span className="ml-2 text-[10px] text-muted">…</span>}
-            </TabBtn>
-            <TabBtn active={tab === "tickets"} onClick={() => setTab("tickets")}>
-              Tickets
-              {ticketCount > 0 && (
-                <span className="ml-1.5 text-[10px] text-muted bg-panel2 px-1.5 rounded-full">
-                  {ticketCount}
-                </span>
-              )}
-            </TabBtn>
-            <TabBtn active={tab === "history"} onClick={() => setTab("history")}>
-              History
-              {response.stats?.total ? (
-                <span className="ml-1.5 text-[10px] text-muted bg-panel2 px-1.5 rounded-full">
-                  {response.stats.total}
-                </span>
-              ) : null}
-            </TabBtn>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex gap-1.5 p-1.5 rounded-full bg-panel3 w-fit">
+              <TabBtn active={tab === "triage"} onClick={() => setTab("triage")}>
+                Triage
+                {triage.status === "ready" && triage.result && (
+                  <CountChip className={SEVERITY[triage.result.severity]?.chip}>{triage.result.severity}</CountChip>
+                )}
+                {triage.status === "loading" && <span className="ml-1.5 text-[10px] text-muted">…</span>}
+              </TabBtn>
+              <TabBtn active={tab === "tickets"} onClick={() => setTab("tickets")}>
+                Tickets
+                {ticketCount > 0 && <CountChip>{String(ticketCount)}</CountChip>}
+              </TabBtn>
+              <TabBtn active={tab === "history"} onClick={() => setTab("history")}>
+                History
+                {response.stats?.total ? <CountChip>{String(response.stats.total)}</CountChip> : null}
+              </TabBtn>
+            </div>
+            <span className="text-xs text-muted">Click any chart segment above to drill down</span>
           </div>
 
-          {/* ── TRIAGE TAB ─────────────────────────────── */}
+          {/* TRIAGE */}
           {tab === "triage" && (
-            <div>
+            <section className="fade-in-up">
               {triage.status === "idle" && commsState.status === "loading" && (
-                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                <div className="rounded-2xl border border-border bg-panel p-6 text-sm text-muted2">
                   Fetching comms history first (5 channels)…
                 </div>
               )}
               {triage.status === "skipped" && (
-                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                <div className="rounded-2xl border border-border bg-panel p-6 text-sm text-muted2">
                   {triage.reason}
                 </div>
               )}
               {triage.status === "loading" && (
-                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                <div className="rounded-2xl border border-border bg-panel p-6 text-sm text-muted2">
                   Running the agent on the latest client message
                   {triage.sourceMessage ? ` (${triage.sourceMessage.channel}, ${relTime(triage.sourceMessage.createdAt)} ago)…` : "…"}
                 </div>
               )}
               {triage.status === "error" && (
-                <div className="rounded-xl border border-err/40 bg-err/10 p-4 text-sm">
-                  <p className="text-err font-medium">Triage failed</p>
+                <div className="rounded-2xl border border-err/30 bg-errSoft p-5 text-sm">
+                  <p className="text-err font-semibold">Triage failed</p>
                   <p className="text-muted2 mt-1 whitespace-pre-wrap">{triage.error}</p>
                 </div>
               )}
               {triage.status === "ready" && triage.result && triage.sourceMessage && (
                 <div
-                  className="rounded-xl border border-border bg-panel severity-bar pl-5 pr-6 py-5"
-                  style={{ ["--bar" as any]: SEVERITY[triage.result.severity]?.bar || "#2c333d" }}
+                  className="rounded-2xl border border-border bg-panel severity-bar pl-7 pr-8 py-7"
+                  style={{ ["--bar" as any]: SEVERITY[triage.result.severity]?.bar || "#838d9d" }}
                 >
-                  <div className="flex items-baseline justify-between gap-3 mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-semibold rounded-md border px-1.5 py-0.5 ${SEVERITY[triage.result.severity]?.chip || ""}`}>
+                  <div className="flex items-baseline justify-between gap-3 mb-4">
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs font-semibold rounded-full border px-3 py-1 ${SEVERITY[triage.result.severity]?.chip || ""}`}>
                         {triage.result.severity}
                       </span>
-                      <span className="font-semibold text-base capitalize">
+                      <span className="font-bold text-lg capitalize tracking-tight">
                         {triage.result.category.replace(/_/g, " ")}
                       </span>
                     </div>
@@ -679,11 +727,11 @@ export default function EscalationsBrowser() {
                     </span>
                   </div>
 
-                  <div className="rounded-lg border border-border2 bg-panel2 px-3 py-2 text-sm text-muted2 italic mb-4">
+                  <div className="rounded-xl border border-border bg-panel2 px-4 py-3 text-sm text-muted2 italic mb-5 leading-relaxed">
                     &quot;{triage.sourceMessage.body}&quot;
                   </div>
 
-                  <div className="text-sm leading-relaxed mb-4">
+                  <div className="text-[14px] leading-[1.7] mb-5">
                     <span className="text-muted">Owner</span>{" "}
                     <strong className="font-semibold">
                       {triage.result.ownerSuggestion.namedPerson || triage.result.ownerSuggestion.role}
@@ -694,39 +742,39 @@ export default function EscalationsBrowser() {
                     <span className="text-muted2"> — {triage.result.ownerSuggestion.rationale}</span>
                   </div>
 
-                  <p className="text-sm leading-relaxed mb-4 whitespace-pre-wrap">{triage.result.summary}</p>
+                  <p className="text-[14px] leading-[1.7] mb-5 whitespace-pre-wrap">{triage.result.summary}</p>
 
-                  <div className="rounded-lg border border-border2 bg-panel2 mb-3">
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-border text-xs text-muted">
-                      <span>
+                  <div className="rounded-xl border border-border bg-panel2 mb-4 overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2.5 border-b border-border text-xs">
+                      <span className="text-muted">
                         Draft reply · {triage.result.draftReply.channel}
                         {triage.result.draftReply.subject ? ` · "${triage.result.draftReply.subject}"` : ""}
                       </span>
                       <button
                         type="button"
                         onClick={() => navigator.clipboard?.writeText(triage.result!.draftReply.body)}
-                        className="text-muted hover:text-text"
+                        className="text-cobalt hover:underline underline-offset-2 transition-colors"
                       >
-                        Copy
+                        Copy ↗
                       </button>
                     </div>
-                    <pre className="px-3 py-3 text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                    <pre className="px-4 py-3.5 text-[14px] leading-[1.7] whitespace-pre-wrap font-sans">
 {triage.result.draftReply.body}
                     </pre>
                   </div>
 
                   <div className="flex flex-wrap gap-2 text-xs">
                     <span
-                      className={`rounded-md border px-2 py-1 ${
+                      className={`rounded-full border px-3 py-1 ${
                         triage.result.autoResolvable.eligible
-                          ? "bg-okSoft text-ok border-ok/40"
-                          : "bg-panel2 text-muted border-border"
+                          ? "bg-okSoft text-ok border-ok/30"
+                          : "bg-panel2 text-muted2 border-border"
                       }`}
                     >
                       Auto-resolve {triage.result.autoResolvable.eligible ? "eligible" : "not eligible"} · {(triage.result.autoResolvable.confidence * 100).toFixed(0)}%
                     </span>
                     {triage.result.routing.actions.map((a: any, i: number) => (
-                      <span key={i} className="rounded-md border border-border bg-panel2 px-2 py-1 text-muted2">
+                      <span key={i} className="rounded-full border border-border bg-panel2 px-3 py-1 text-muted2">
                         {a.type === "slack_dm" && <>Slack DM <strong className="text-text">{a.to}</strong></>}
                         {a.type === "slack_channel" && <>Slack <strong className="text-text">#{a.channel}</strong></>}
                         {a.type === "linear_issue" && <>Linear · <strong className="text-text">{a.title}</strong></>}
@@ -737,13 +785,13 @@ export default function EscalationsBrowser() {
                   </div>
                 </div>
               )}
-            </div>
+            </section>
           )}
 
-          {/* ── TICKETS TAB ──────────────────────────────── */}
+          {/* TICKETS */}
           {tab === "tickets" && (
-            <div className="rounded-xl border border-border bg-panel overflow-hidden">
-              <div className="px-4 py-2 border-b border-border text-xs text-muted flex items-center justify-between">
+            <section className="rounded-2xl border border-border bg-panel overflow-hidden fade-in-up">
+              <div className="px-5 py-3 border-b border-border text-xs text-muted flex items-center justify-between">
                 <span>
                   {filteredTickets.length} {filteredTickets.length === 1 ? "ticket" : "tickets"}
                   {chartClassFilter && (
@@ -758,7 +806,7 @@ export default function EscalationsBrowser() {
                     <button
                       type="button"
                       onClick={() => setChartClassFilter(null)}
-                      className="text-muted hover:text-text"
+                      className="text-cobalt hover:underline"
                     >
                       Clear filter ✕
                     </button>
@@ -767,40 +815,38 @@ export default function EscalationsBrowser() {
                 </div>
               </div>
               {filteredTickets.length === 0 && (
-                <div className="px-4 py-6 text-sm text-muted">
-                  {ticketCount === 0
-                    ? "No tickets found in the Metabase feed for this customer."
-                    : "No tickets match this filter."}
+                <div className="px-5 py-8 text-sm text-muted2">
+                  {ticketCount === 0 ? "No tickets found in the Metabase feed for this customer." : "No tickets match this filter."}
                 </div>
               )}
               {filteredTickets.map((t) => {
-                const classBar = CLASSIFICATION_COLORS[t.classification] || "#2c333d";
+                const classBar = CLASSIFICATION_COLORS[t.classification] || "#838d9d";
                 const classLabel = CLASSIFICATION_LABELS[t.classification] || t.classification;
                 const stateCls =
                   t.state === "Done"
                     ? "text-ok"
                     : t.state === "In Progress" || t.state === "In Review"
-                      ? "text-accent"
+                      ? "text-cobalt"
                       : t.state === "Canceled" || t.state === "Duplicate"
                         ? "text-err"
                         : "text-text";
                 return (
                   <div
                     key={t.id}
-                    className="severity-bar row-divider px-4 py-3 hover:bg-panel2/60"
+                    className="severity-bar row-divider row-hover px-5 py-3.5"
                     style={{ ["--bar" as any]: classBar }}
                   >
                     <div className="flex items-center gap-2 text-xs flex-wrap">
                       <span className="font-mono text-muted">{t.identifier || "—"}</span>
                       <span
-                        className="rounded-md border px-1.5 py-0.5"
-                        style={{ borderColor: classBar + "66", background: classBar + "15", color: classBar }}
+                        className="rounded-full border px-2 py-0.5 font-medium"
+                        style={{ borderColor: classBar + "55", background: classBar + "10", color: classBar }}
                       >
                         {classLabel}
                       </span>
                       <span className={stateCls}>{t.state}</span>
                       {t.churnPotentialStatus && (
-                        <span className="rounded-md border border-warn/40 bg-warnSoft text-warn px-1.5 py-0.5">
+                        <span className="rounded-full border border-warn/30 bg-warnSoft text-warn px-2 py-0.5">
                           {t.churnPotentialStatus}
                         </span>
                       )}
@@ -810,42 +856,42 @@ export default function EscalationsBrowser() {
                       href={t.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="block mt-1 text-sm font-medium hover:underline underline-offset-4 truncate"
+                      className="block mt-1.5 text-[14px] font-medium hover:underline underline-offset-4 truncate"
                     >
                       {t.title}
                     </a>
-                    <div className="text-xs text-muted mt-0.5">
-                      {t.amName && <>AM <span className="text-text">{t.amName}</span></>}
+                    <div className="text-xs text-muted mt-1">
+                      {t.amName && <>AM <span className="text-text font-medium">{t.amName}</span></>}
                       {t.assigneeEmail && (
                         <>
-                          {t.amName ? " · " : ""}Assignee <span className="text-text">{t.assigneeEmail}</span>
+                          {t.amName ? " · " : ""}Assignee <span className="text-text font-medium">{t.assigneeEmail}</span>
                         </>
                       )}
                     </div>
                   </div>
                 );
               })}
-            </div>
+            </section>
           )}
 
-          {/* ── HISTORY TAB ──────────────────────────────── */}
+          {/* HISTORY */}
           {tab === "history" && (
-            <div className="space-y-3">
+            <section className="space-y-4 fade-in-up">
               {commsState.status === "loading" && (
-                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                <div className="rounded-2xl border border-border bg-panel p-5 text-sm text-muted2">
                   Fetching comms history (5 channels)…
                 </div>
               )}
               {commsState.status === "error" && (
-                <div className="rounded-xl border border-warn/40 bg-warn/5 p-4">
-                  <p className="text-warn font-medium text-sm">Comms history unavailable</p>
+                <div className="rounded-2xl border border-warn/30 bg-warnSoft p-5">
+                  <p className="text-warn font-semibold text-sm">Comms history unavailable</p>
                   <p className="text-muted2 text-sm mt-1">{commsState.message}</p>
                 </div>
               )}
 
               {abortedChannels.length > 0 && (
-                <div className="rounded-xl border border-warn/40 bg-warn/5 p-3">
-                  <p className="text-xs text-warn mb-2">
+                <div className="rounded-2xl border border-warn/30 bg-warnSoft p-4">
+                  <p className="text-xs text-warn mb-2 font-semibold">
                     {abortedChannels.length} channel{abortedChannels.length === 1 ? "" : "s"} timed out
                   </p>
                   <div className="flex flex-wrap gap-2 text-xs">
@@ -857,11 +903,11 @@ export default function EscalationsBrowser() {
                           type="button"
                           onClick={() => retryChannel(ch)}
                           disabled={busy}
-                          className="rounded-full border px-3 py-1 disabled:opacity-50"
+                          className="rounded-full border px-3 py-1 disabled:opacity-50 transition-all hover:-translate-y-0.5"
                           style={{
-                            borderColor: (CHANNEL_COLORS[ch] || "#2c333d") + "66",
-                            color: CHANNEL_COLORS[ch] || "#7e8794",
-                            background: (CHANNEL_COLORS[ch] || "#2c333d") + "10",
+                            borderColor: (CHANNEL_COLORS[ch] || "#838d9d") + "55",
+                            color: CHANNEL_COLORS[ch] || "#838d9d",
+                            background: (CHANNEL_COLORS[ch] || "#838d9d") + "10",
                           }}
                         >
                           {busy ? `Loading ${CHANNEL_LABELS[ch]}…` : `Retry ${CHANNEL_LABELS[ch]}`}
@@ -872,7 +918,7 @@ export default function EscalationsBrowser() {
                 </div>
               )}
 
-              <div className="rounded-xl border border-border bg-panel p-3">
+              <div className="rounded-2xl border border-border bg-panel p-4">
                 <div className="flex flex-wrap gap-2 items-center text-xs">
                   <span className="text-muted">Channel</span>
                   {CHANNELS.map((c) => {
@@ -883,11 +929,11 @@ export default function EscalationsBrowser() {
                         key={c}
                         type="button"
                         onClick={() => setChartChannelFilter(chartChannelFilter === c ? null : c)}
-                        className="rounded-full border px-2.5 py-0.5"
+                        className="rounded-full border px-3 py-1 transition-colors"
                         style={{
-                          borderColor: on ? color + "66" : "#222831",
-                          background: on ? color + "15" : "#161827",
-                          color: on ? color : "#7e8794",
+                          borderColor: on ? color + "55" : "#e5e7eb",
+                          background: on ? color + "10" : "#f7f8fb",
+                          color: on ? color : "#838d9d",
                         }}
                       >
                         {CHANNEL_LABELS[c]}
@@ -900,15 +946,15 @@ export default function EscalationsBrowser() {
                       key={s}
                       type="button"
                       onClick={() => setSenderFilter(s)}
-                      className={`rounded-full border px-2.5 py-0.5 ${
-                        senderFilter === s ? "border-brand/40 bg-brandSoft text-brand" : "border-border text-muted bg-panel2"
+                      className={`rounded-full border px-3 py-1 transition-colors ${
+                        senderFilter === s ? "border-brand/40 bg-brandSoft text-brand" : "border-border text-muted2 bg-panel2"
                       }`}
                     >
                       {s}
                     </button>
                   ))}
                   <input
-                    className="ml-auto bg-panel2 border border-border rounded-lg px-2 py-1 outline-none focus:border-border2 text-xs w-48"
+                    className="ml-auto bg-panel2 border border-border rounded-lg px-3 py-1.5 outline-none focus:border-cobalt text-xs w-56"
                     placeholder="Search messages…"
                     value={textFilter}
                     onChange={(e) => setTextFilter(e.target.value)}
@@ -916,22 +962,22 @@ export default function EscalationsBrowser() {
                 </div>
               </div>
 
-              <div className="rounded-xl border border-border bg-panel overflow-hidden">
+              <div className="rounded-2xl border border-border bg-panel overflow-hidden">
                 {filteredComms.length === 0 ? (
-                  <div className="p-6 text-sm text-muted">
+                  <div className="p-8 text-sm text-muted2">
                     {commsState.status === "ready" ? "No messages match these filters." : "Comms not loaded yet."}
                   </div>
                 ) : (
                   groupedComms.map(([day, items]) => (
                     <div key={day}>
-                      <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-muted bg-panel2 border-y border-border font-bold">
+                      <div className="px-5 py-2 text-[10px] uppercase tracking-wider text-muted bg-panel2 border-y border-border font-bold">
                         {day}
                       </div>
                       {items.map((m, i) => (
                         <div
                           key={`${day}-${i}`}
-                          className="severity-bar row-divider px-4 py-2.5"
-                          style={{ ["--bar" as any]: CHANNEL_COLORS[m.channel] || "#2c333d" }}
+                          className="severity-bar row-divider row-hover px-5 py-3"
+                          style={{ ["--bar" as any]: CHANNEL_COLORS[m.channel] || "#838d9d" }}
                         >
                           <div className="flex items-center gap-2 text-xs">
                             <span className="text-muted">{CHANNEL_LABELS[m.channel] || m.channel}</span>
@@ -939,9 +985,9 @@ export default function EscalationsBrowser() {
                             <span
                               className={
                                 m.sender === "client"
-                                  ? "text-brand"
+                                  ? "text-brand font-medium"
                                   : m.sender === "team"
-                                    ? "text-ok"
+                                    ? "text-ok font-medium"
                                     : "text-muted"
                               }
                             >
@@ -954,23 +1000,58 @@ export default function EscalationsBrowser() {
                               {relTime(m.createdAt)} ago
                             </span>
                           </div>
-                          <p className="text-sm mt-0.5 whitespace-pre-wrap">{m.body || "(no body)"}</p>
+                          <p className="text-[14px] mt-1 whitespace-pre-wrap leading-relaxed">{m.body || "(no body)"}</p>
                         </div>
                       ))}
                     </div>
                   ))
                 )}
               </div>
-            </div>
+            </section>
           )}
         </>
       )}
 
       {!response && !loading && (
-        <div className="text-center text-xs text-muted pt-4">
+        <div className="text-center text-xs text-muted pt-2">
           Substring matches work — &quot;lacquer&quot; finds &quot;Lacquer Lounge LLC&quot;.
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Subcomponents ───────────────────────────────────────────────────────
+
+function StatTile({
+  label,
+  value,
+  sub,
+  accent,
+  valueCls,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent: string;
+  valueCls?: string;
+}) {
+  return (
+    <div className="rounded-2xl bg-panel border border-border p-5 card-hover relative overflow-hidden">
+      <div className="text-[10px] uppercase tracking-wider font-bold text-muted">
+        ● {label}
+      </div>
+      <div
+        className={`text-[34px] font-extrabold tracking-[-0.025em] mt-2 leading-[1.0] ${valueCls || ""}`}
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        {value}
+      </div>
+      <div className="text-[11px] text-muted2 mt-1">{sub}</div>
+      <div
+        className="absolute bottom-0 left-0 right-0 h-0.5 rounded-full"
+        style={{ background: accent, opacity: 0.6 }}
+      />
     </div>
   );
 }
@@ -980,13 +1061,21 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
     <button
       type="button"
       onClick={onClick}
-      className={`px-4 py-1.5 text-sm rounded-full transition-colors ${
+      className={`px-5 py-2 text-[13px] rounded-full transition-all ${
         active
-          ? "bg-brandSoft text-brand font-semibold"
-          : "text-muted hover:text-text"
+          ? "bg-text text-white font-semibold"
+          : "text-muted2 hover:text-text hover:bg-panel"
       }`}
     >
-      {children}
+      <span className="inline-flex items-center gap-2">{children}</span>
     </button>
+  );
+}
+
+function CountChip({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${className || "bg-cobaltSoft text-cobalt"}`}>
+      {children}
+    </span>
   );
 }

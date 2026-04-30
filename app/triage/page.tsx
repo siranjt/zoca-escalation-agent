@@ -3,6 +3,7 @@
 import { useState } from "react";
 import EscalationForm from "@/components/EscalationForm";
 import ResultPanel from "@/components/ResultPanel";
+import HealthBadge from "@/components/HealthBadge";
 import type { AgentResult } from "@/lib/types";
 
 interface ApiResponse {
@@ -51,39 +52,34 @@ export default function Page() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-8 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Triage by message</h1>
-          <p className="text-muted mt-2">
-            Paste an arbitrary escalation message — useful when an issue arrives outside
-            Zoca's recorded channels (forwarded email, Slack DM, etc). The agent will identify
-            the customer if any hints match, pull their context, and return triage + draft
-            reply + routing.
+    <main className="min-h-screen bg-bg">
+      <div className="mx-auto max-w-[1180px] px-8 py-8">
+        <header className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-3 text-text">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/zoca-logo.svg" alt="Zoca" width={81} height={20} className="h-5 w-auto" style={{ color: "currentColor" }} />
+          </div>
+          <div className="flex items-center gap-6">
+            <a href="/" className="text-sm text-muted2 hover:text-text transition-colors font-medium">Customer 360</a>
+            <a href="/tickets" className="text-sm text-muted2 hover:text-text transition-colors">All tickets</a>
+            <HealthBadge />
+          </div>
+        </header>
+
+        <div className="text-center mb-10">
+          <h1 className="text-4xl font-extrabold tracking-tight">Triage by message</h1>
+          <p className="mt-3 max-w-[560px] mx-auto text-sm text-muted2 leading-relaxed">
+            Paste an escalation that arrived outside Zoca's recorded channels (forwarded email, Slack
+            DM, etc). The agent identifies the customer if any hints match, pulls their context,
+            then returns triage + draft reply + routing.
           </p>
         </div>
-        <nav className="flex gap-4 text-sm text-muted whitespace-nowrap">
-          <a href="/" className="hover:text-text underline-offset-4 hover:underline font-medium">
-            Customer 360
-          </a>
-          <a href="/tickets" className="hover:text-text underline-offset-4 hover:underline">
-            All tickets
-          </a>
-        </nav>
-      </header>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <EscalationForm onSubmit={handleSubmit} disabled={loading} />
-        <ResultPanel loading={loading} response={response} />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <EscalationForm onSubmit={handleSubmit} disabled={loading} />
+          <ResultPanel loading={loading} response={response} />
+        </div>
       </div>
-
-      <footer className="mt-16 text-xs text-muted">
-        <p>
-          API: <code className="text-text">POST /api/escalation</code> · webhooks at{" "}
-          <code className="text-text">POST /api/webhook</code> · customer lookup at{" "}
-          <code className="text-text">GET /api/customer/[id]</code>
-        </p>
-      </footer>
     </main>
   );
 }

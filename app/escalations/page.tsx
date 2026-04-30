@@ -1,34 +1,28 @@
 import EscalationsBrowser from "@/components/EscalationsBrowser";
+import HealthBadge from "@/components/HealthBadge";
 
 export const metadata = {
-  title: "Escalation History · Zoca",
+  title: "Customer 360 · Zoca",
 };
 
+// Alias of `/` — same Customer 360 surface, different URL for backwards compat.
 export default function Page() {
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-8 flex items-end justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Customer 360</h1>
-          <p className="text-muted mt-2">
-            Search by business name, entity ID (UUID), email, or Chargebee customer ID. One
-            search returns triage of their latest message, all related Linear tickets
-            (Finance + CX), and the full comms timeline (App Chat / Email / Phone / Video / SMS).
-          </p>
-        </div>
-        <nav className="flex gap-4 text-sm text-muted whitespace-nowrap">
-          <a href="/" className="hover:text-text underline-offset-4 hover:underline font-medium">
-            Customer 360 (home)
-          </a>
-          <a href="/triage" className="hover:text-text underline-offset-4 hover:underline">
-            Triage by message
-          </a>
-          <a href="/tickets" className="hover:text-text underline-offset-4 hover:underline">
-            All tickets
-          </a>
-        </nav>
-      </header>
-      <EscalationsBrowser />
+    <main className="min-h-screen bg-bg">
+      <div className="mx-auto max-w-[1180px] px-8 py-8">
+        <header className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-3 text-text">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/zoca-logo.svg" alt="Zoca" width={81} height={20} className="h-5 w-auto" style={{ color: "currentColor" }} />
+          </div>
+          <div className="flex items-center gap-6">
+            <a href="/triage" className="text-sm text-muted2 hover:text-text transition-colors">Triage</a>
+            <a href="/tickets" className="text-sm text-muted2 hover:text-text transition-colors">All tickets</a>
+            <HealthBadge />
+          </div>
+        </header>
+        <EscalationsBrowser />
+      </div>
     </main>
   );
 }

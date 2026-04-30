@@ -3,11 +3,11 @@
 @tailwind utilities;
 
 html, body {
-  background: #0a0b14;
-  color: #f4f7fa;
+  background: #fafbfc;
+  color: #0d1117;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   -webkit-font-smoothing: antialiased;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.012em;
 }
 
 textarea, input, select, button {
@@ -15,43 +15,55 @@ textarea, input, select, button {
   color: inherit;
 }
 
-textarea {
-  resize: vertical;
-}
+textarea { resize: vertical; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1f2233; border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: #2a2e44; }
+::-webkit-scrollbar-thumb { background: #d8dde6; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #b8bfca; }
 
-.row-divider { border-bottom: 1px solid #1f2233; }
+.row-divider { border-bottom: 1px solid #ebedf2; }
 
 .severity-bar { position: relative; }
 .severity-bar::before {
   content: "";
   position: absolute;
-  left: 0; top: 0; bottom: 0;
+  left: 0; top: 14px; bottom: 14px;
   width: 3px;
-  background: var(--bar, #2c333d);
+  border-radius: 0 3px 3px 0;
+  background: var(--bar, #d8dde6);
 }
 
 .brand-gradient-text {
-  background: linear-gradient(180deg, #ffa8cd 0%, #ff7eb9 100%);
+  background: linear-gradient(90deg, #3b5bff 0%, #8b4dff 50%, #ff5aa0 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-.hero-bg {
-  background:
-    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(78,101,255,0.12) 0%, rgba(255,168,205,0.06) 35%, transparent 70%),
-    #0a0b14;
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.live-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up { animation: fade-in-up 0.4s ease-out forwards; }
+
+.card-hover { transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s; }
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px -8px rgba(13, 17, 23, 0.08);
+  border-color: #d8dde6;
 }
 
-/* recharts surfaces */
+.row-hover { transition: background 0.15s, padding-left 0.15s; }
+.row-hover:hover { background: #f7f8fb; }
+
+/* Recharts surfaces (light) */
 .recharts-tooltip-wrapper:focus,
 .recharts-surface:focus { outline: none; }
-.recharts-cartesian-axis-tick text { fill: #5d6478; font-family: var(--font-sans); }
+.recharts-cartesian-axis-tick text { fill: #838d9d; font-family: var(--font-sans); }
 .recharts-cartesian-grid-horizontal line,
-.recharts-cartesian-grid-vertical line { stroke: #1f2233; }
-.recharts-active-dot circle { stroke: #0a0b14; stroke-width: 2; }
+.recharts-cartesian-grid-vertical line { stroke: #eef0f4; }
+.recharts-active-dot circle { stroke: #fff; stroke-width: 2; }

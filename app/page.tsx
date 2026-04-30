@@ -2,24 +2,26 @@ import EscalationsBrowser from "@/components/EscalationsBrowser";
 import HealthBadge from "@/components/HealthBadge";
 
 export const metadata = {
-  title: "Customer 360 · Zoca Escalation Agent",
+  title: "Customer 360 · Zoca",
 };
 
 export default function Page() {
   return (
-    <main className="min-h-screen hero-bg">
-      <div className="mx-auto max-w-[1180px] px-6 py-6">
-        {/* Top nav */}
-        <header className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-4">
-            <span className="font-black text-[22px] tracking-[-0.04em] leading-none">
-              ZOC<span className="inline-block scale-x-[-1]">Q</span>
-            </span>
-            <span className="text-muted text-sm">·  Customer 360</span>
+    <main className="min-h-screen bg-bg">
+      <div className="mx-auto max-w-[1180px] px-8 py-8">
+        {/* Top nav: logo left, links + health right (locked to corners) */}
+        <header className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-3 text-text">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/zoca-logo.svg" alt="Zoca" width={81} height={20} className="h-5 w-auto text-text" style={{ color: "currentColor" }} />
           </div>
-          <div className="flex items-center gap-5">
-            <a href="/triage" className="text-sm text-muted2 hover:text-text">Triage</a>
-            <a href="/tickets" className="text-sm text-muted2 hover:text-text">All tickets</a>
+          <div className="flex items-center gap-6">
+            <a href="/triage" className="text-sm text-muted2 hover:text-text transition-colors">
+              Triage
+            </a>
+            <a href="/tickets" className="text-sm text-muted2 hover:text-text transition-colors">
+              All tickets
+            </a>
             <HealthBadge />
           </div>
         </header>
