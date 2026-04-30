@@ -307,6 +307,9 @@ export default function EscalationsBrowser() {
     }
     setTriage({ status: "loading", sourceMessage: latestClient, result: null });
     try {
+      // Send the customer + comms we already have so the route can skip the
+      // 5-CSV refetch in buildContext (the cause of the timeout).
+      const recentComms = (phase2?.comms || []).slice(0, 50);
       const r = await fetch("/api/escalation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -319,9 +322,38 @@ export default function EscalationsBrowser() {
             email: phase1.customer.email,
             bizName: phase1.customer.bizName,
           },
+          prefetched: {
+            customer: {
+              bizName: phase1.customer.bizName,
+              entityId: phase1.customer.entityId,
+              customerId: phase1.customer.customerId,
+              email: phase1.customer.email,
+              phone: phase1.customer.phone,
+              amName: phase1.customer.amName,
+              spName: phase1.customer.spName,
+              aeName: phase1.customer.aeName,
+              status: phase1.customer.status,
+              monthlyRevenue: phase1.customer.monthlyRevenue,
+            },
+            comms: recentComms,
+          },
         }),
       });
-      const tdata = await r.json();
+      const text = await r.text();
+      let tdata: any;
+      try {
+        tdata = JSON.parse(text);
+      } catch {
+        // Vercel returned an HTML error page (function timeout / crash). Surface a
+        // clearer message instead of "Unexpected token 'A', 'An error o...'".
+        setTriage({
+          status: "error",
+          sourceMessage: latestClient,
+          result: null,
+          error: `Agent endpoint returned non-JSON (Vercel function error). HTTP ${r.status}. Most likely a function timeout — check ANTHROPIC_API_KEY in Vercel env vars and retry.`,
+        });
+        return;
+      }
       if (tdata.ok && tdata.result) {
         setTriage({ status: "ready", sourceMessage: latestClient, result: tdata.result as TriageResult });
       } else {
