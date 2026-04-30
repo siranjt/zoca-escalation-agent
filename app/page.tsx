@@ -16,6 +16,9 @@ export default function Page() {
             <img src="/zoca-logo.svg" alt="Zoca" width={81} height={20} className="h-5 w-auto text-text" style={{ color: "currentColor" }} />
           </div>
           <div className="flex items-center gap-6">
+            <a href="/queue" className="text-sm text-muted2 hover:text-text transition-colors font-medium">
+              Queue
+            </a>
             <a href="/triage" className="text-sm text-muted2 hover:text-text transition-colors">
               Triage
             </a>

@@ -60,7 +60,8 @@ export default function Page() {
             <img src="/zoca-logo.svg" alt="Zoca" width={81} height={20} className="h-5 w-auto" style={{ color: "currentColor" }} />
           </div>
           <div className="flex items-center gap-6">
-            <a href="/" className="text-sm text-muted2 hover:text-text transition-colors font-medium">Customer 360</a>
+            <a href="/queue" className="text-sm text-muted2 hover:text-text transition-colors font-medium">Queue</a>
+            <a href="/" className="text-sm text-muted2 hover:text-text transition-colors">Customer 360</a>
             <a href="/tickets" className="text-sm text-muted2 hover:text-text transition-colors">All tickets</a>
             <HealthBadge />
           </div>

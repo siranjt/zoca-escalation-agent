@@ -1,8 +1,8 @@
-import TicketsBrowser from "@/components/TicketsBrowser";
+import EscalationQueue from "@/components/EscalationQueue";
 import HealthBadge from "@/components/HealthBadge";
 
 export const metadata = {
-  title: "All tickets · Zoca",
+  title: "Escalation Queue · Zoca",
 };
 
 export default function Page() {
@@ -15,23 +15,14 @@ export default function Page() {
             <img src="/zoca-logo.svg" alt="Zoca" width={81} height={20} className="h-5 w-auto" style={{ color: "currentColor" }} />
           </div>
           <div className="flex items-center gap-6">
-            <a href="/queue" className="text-sm text-muted2 hover:text-text transition-colors font-medium">Queue</a>
             <a href="/" className="text-sm text-muted2 hover:text-text transition-colors">Customer 360</a>
             <a href="/triage" className="text-sm text-muted2 hover:text-text transition-colors">Triage</a>
+            <a href="/tickets" className="text-sm text-muted2 hover:text-text transition-colors">All tickets</a>
             <HealthBadge />
           </div>
         </header>
 
-        <div className="text-center mb-10">
-          <h1 className="text-4xl font-extrabold tracking-tight">All tickets</h1>
-          <p className="mt-3 max-w-[640px] mx-auto text-sm text-muted2 leading-relaxed">
-            Linear tickets across Finance + CX, filtered to the four escalation patterns —
-            Churn, Retention Risk, Subscription Support, Paid Offboarding, and Subscription
-            Cancellation. Sorted latest first.
-          </p>
-        </div>
-
-        <TicketsBrowser />
+        <EscalationQueue />
       </div>
     </main>
   );

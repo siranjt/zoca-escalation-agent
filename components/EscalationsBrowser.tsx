@@ -222,6 +222,20 @@ export default function EscalationsBrowser() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Auto-search when arriving from the queue with ?q=<entityId>.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("q");
+    if (!q || query) return;
+    setQuery(q);
+    // Defer one tick so the input value updates first.
+    setTimeout(() => {
+      const form = document.getElementById("c360-search-form") as HTMLFormElement | null;
+      form?.requestSubmit();
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function lookup(e: React.FormEvent) {
     e.preventDefault();
     if (!query.trim()) return;
@@ -486,7 +500,7 @@ export default function EscalationsBrowser() {
       </section>
 
       {/* SEARCH */}
-      <form onSubmit={lookup} className="flex justify-center">
+      <form id="c360-search-form" onSubmit={lookup} className="flex justify-center">
         <div
           className="flex items-center gap-3 pl-6 pr-2 py-2 rounded-full border border-border2 bg-panel w-full max-w-[640px]"
           style={{ boxShadow: "0 1px 2px rgba(13, 17, 23, 0.04)" }}
