@@ -1,6 +1,19 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import CommsActivityChart from "./charts/CommsActivityChart";
+import ChannelMixDonut from "./charts/ChannelMixDonut";
+import TicketsClassificationDonut from "./charts/TicketsClassificationDonut";
+import TicketsOverTimeChart from "./charts/TicketsOverTimeChart";
+import ResponseHealthCard from "./charts/ResponseHealthCard";
+import {
+  CHANNEL_COLORS,
+  CHANNEL_LABELS,
+  CLASSIFICATION_COLORS,
+  CLASSIFICATION_LABELS,
+} from "./charts/colors";
+
+// ─── Types ────────────────────────────────────────────────────────────────
 
 type Channel = "app_chat" | "email" | "phone" | "video" | "sms";
 type Sender = "client" | "team" | "unknown";
@@ -73,12 +86,6 @@ interface ApiResponse {
   error?: string;
 }
 
-type CommsLoadState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready" }
-  | { status: "error"; message: string };
-
 interface TriageResult {
   severity: "P0" | "P1" | "P2" | "P3";
   category: string;
@@ -95,44 +102,74 @@ interface TriageState {
   sourceMessage: Comm | null;
   result: TriageResult | null;
   error?: string;
-  reason?: string; // when skipped
+  reason?: string;
 }
 
-const CHANNELS: { key: Channel; label: string; cls: string }[] = [
-  { key: "app_chat", label: "App Chat", cls: "bg-accent/15 text-accent border-accent/40" },
-  { key: "email", label: "Email", cls: "bg-indigo-500/15 text-indigo-300 border-indigo-500/40" },
-  { key: "phone", label: "Phone", cls: "bg-ok/15 text-ok border-ok/40" },
-  { key: "video", label: "Video", cls: "bg-purple-500/15 text-purple-300 border-purple-500/40" },
-  { key: "sms", label: "SMS", cls: "bg-warn/15 text-warn border-warn/40" },
+type CommsLoadState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready" }
+  | { status: "error"; message: string };
+
+type Tab = "triage" | "tickets" | "history";
+
+// ─── Constants ────────────────────────────────────────────────────────────
+
+const CHANNELS: Channel[] = ["app_chat", "email", "phone", "video", "sms"];
+
+const SEVERITY: Record<string, { bar: string; chip: string }> = {
+  P0: { bar: "#ef5b5b", chip: "bg-errSoft text-err border-err/40" },
+  P1: { bar: "#ef5b5b", chip: "bg-errSoft text-err border-err/40" },
+  P2: { bar: "#5b8cff", chip: "bg-accentSoft text-accent border-accent/40" },
+  P3: { bar: "#7e8794", chip: "bg-panel2 text-muted border-border" },
+};
+
+const TIME_WINDOWS: { key: string; label: string; days: number }[] = [
+  { key: "30", label: "30d", days: 30 },
+  { key: "90", label: "90d", days: 90 },
+  { key: "365", label: "1y", days: 365 },
+  { key: "0", label: "All time", days: 0 },
 ];
 
-const SENDERS: { key: Sender; label: string; cls: string }[] = [
-  { key: "client", label: "Client", cls: "bg-pink-500/15 text-pink-300 border-pink-500/40" },
-  { key: "team", label: "Team", cls: "bg-teal-500/15 text-teal-300 border-teal-500/40" },
-  { key: "unknown", label: "Unknown", cls: "bg-panel2 text-muted border-border" },
-];
-
-const TIME_WINDOWS = [
-  { key: "30", label: "30 days" },
-  { key: "90", label: "90 days" },
-  { key: "365", label: "1 year" },
-  { key: "0", label: "All time" },
-];
+// ─── Helpers ──────────────────────────────────────────────────────────────
 
 function relTime(iso: string): string {
   const d = Date.parse(iso);
   if (!Number.isFinite(d)) return "";
   const sec = Math.floor((Date.now() - d) / 1000);
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return `${sec}s`;
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return `${min}m`;
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return `${hr}h`;
   const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
+  if (day < 30) return `${day}d`;
   const mo = Math.floor(day / 30);
-  if (mo < 12) return `${mo}mo ago`;
-  return `${Math.floor(mo / 12)}y ago`;
+  if (mo < 12) return `${mo}mo`;
+  return `${Math.floor(mo / 12)}y`;
+}
+
+function dateBucket(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Unknown";
+  const today = new Date();
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  if (sameDay) return "Today";
+  const y = new Date(today);
+  y.setDate(today.getDate() - 1);
+  if (
+    d.getFullYear() === y.getFullYear() &&
+    d.getMonth() === y.getMonth() &&
+    d.getDate() === y.getDate()
+  )
+    return "Yesterday";
+  const sameYear = d.getFullYear() === today.getFullYear();
+  return sameYear
+    ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function fmtDuration(sec?: number): string {
@@ -142,24 +179,29 @@ function fmtDuration(sec?: number): string {
   return m ? `${m}m ${s}s` : `${s}s`;
 }
 
+function initials(name: string): string {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || name[0].toUpperCase();
+}
+
+// ─── Component ────────────────────────────────────────────────────────────
+
 export default function EscalationsBrowser() {
   const [query, setQuery] = useState("");
-  const [sinceDays, setSinceDays] = useState("365");
+  const [sinceDays, setSinceDays] = useState("90");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
-
-  // Comms load is deliberately kicked off after phase 1 (customer + tickets)
-  // because the comms CSVs are huge and frequently exceed the function timeout.
   const [commsState, setCommsState] = useState<CommsLoadState>({ status: "idle" });
-
-  // Triage state — runs as phase 3 after comms arrive.
   const [triage, setTriage] = useState<TriageState>({ status: "idle", sourceMessage: null, result: null });
-
-  // Per-channel "retry" busy state
   const [retrying, setRetrying] = useState<Set<Channel>>(new Set());
+  const [tab, setTab] = useState<Tab>("triage");
 
-  // Filters (client-side)
-  const [channelFilter, setChannelFilter] = useState<Set<Channel>>(new Set(CHANNELS.map((c) => c.key)));
+  // Chart filters (interactive drill-down)
+  const [chartChannelFilter, setChartChannelFilter] = useState<string | null>(null);
+  const [chartClassFilter, setChartClassFilter] = useState<string | null>(null);
+
+  // History filters
   const [senderFilter, setSenderFilter] = useState<Sender | "all">("client");
   const [textFilter, setTextFilter] = useState("");
 
@@ -170,8 +212,10 @@ export default function EscalationsBrowser() {
     setResponse(null);
     setCommsState({ status: "idle" });
     setTriage({ status: "idle", sourceMessage: null, result: null });
+    setChartChannelFilter(null);
+    setChartClassFilter(null);
+    setTab("triage");
 
-    // PHASE 1 — customer + tickets (skip the slow comms fetch).
     let phase1: ApiResponse | null = null;
     try {
       const u = new URL("/api/escalations", window.location.origin);
@@ -184,11 +228,7 @@ export default function EscalationsBrowser() {
         phase1 = JSON.parse(text) as ApiResponse;
         setResponse(phase1);
       } catch {
-        setResponse({
-          ok: false,
-          error:
-            "Phase 1 returned non-JSON (Vercel function timeout). Customer + tickets lookup failed. Retry — the BaseSheet CSV cache should be primed now.",
-        });
+        setResponse({ ok: false, error: "Phase 1 returned non-JSON. Retry — cache should be primed now." });
         setLoading(false);
         return;
       }
@@ -201,8 +241,6 @@ export default function EscalationsBrowser() {
 
     if (!phase1?.ok || !phase1.customer) return;
 
-    // PHASE 2 — comms history. Big CSVs, may time out. Errors here are
-    // contained to the Comms section without breaking the page.
     setCommsState({ status: "loading" });
     let phase2: ApiResponse | null = null;
     try {
@@ -214,22 +252,13 @@ export default function EscalationsBrowser() {
       try {
         phase2 = JSON.parse(text) as ApiResponse;
       } catch {
-        setCommsState({
-          status: "error",
-          message:
-            "Comms server returned non-JSON (Vercel function timeout on the 130 MB feeds). Try again — the cache should be primed now. Per-channel retry buttons may still work.",
-        });
+        setCommsState({ status: "error", message: "Comms server returned non-JSON. Retry — cache should be primed." });
         return;
       }
       if (!phase2.ok) {
-        setCommsState({
-          status: "error",
-          message: phase2.error || "Comms fetch failed",
-        });
+        setCommsState({ status: "error", message: phase2.error || "Comms fetch failed" });
         return;
       }
-      // Merge the comms + perChannelStatus into the existing response
-      // (we keep the customer + tickets from phase 1 unchanged).
       setResponse((prev) =>
         prev
           ? {
@@ -248,7 +277,6 @@ export default function EscalationsBrowser() {
       return;
     }
 
-    // PHASE 3 — auto-triage the latest customer-initiated message.
     const comms = phase2?.comms || [];
     const latestClient = comms.find((m) => m.sender === "client");
     if (!latestClient) {
@@ -313,7 +341,6 @@ export default function EscalationsBrowser() {
       } catch {
         data = { ok: false, error: `${ch}: still timing out — give the cache a moment.` };
       }
-      // Merge: replace this channel's messages in the existing response.
       setResponse((prev) => {
         if (!prev) return prev;
         const others = (prev.comms || []).filter((m) => m.channel !== ch);
@@ -349,29 +376,50 @@ export default function EscalationsBrowser() {
     }
   }
 
-  const filtered = useMemo(() => {
+  // ── Filtering ──────────────────────────────────────────────────────────
+
+  const filteredComms = useMemo(() => {
     if (!response?.comms) return [];
     const t = textFilter.trim().toLowerCase();
     const out = response.comms.filter((m) => {
-      if (!channelFilter.has(m.channel)) return false;
+      if (chartChannelFilter && m.channel !== chartChannelFilter) return false;
       if (senderFilter !== "all" && m.sender !== senderFilter) return false;
       if (t && !(m.body || "").toLowerCase().includes(t)) return false;
       return true;
     });
-    // Defensive re-sort so the timeline is always latest-first regardless of
-    // server-side ordering quirks.
     out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     return out;
-  }, [response, channelFilter, senderFilter, textFilter]);
+  }, [response, chartChannelFilter, senderFilter, textFilter]);
 
-  function toggleChannel(c: Channel) {
-    setChannelFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(c)) next.delete(c);
-      else next.add(c);
-      return next;
-    });
-  }
+  const groupedComms = useMemo(() => {
+    const groups = new Map<string, Comm[]>();
+    for (const m of filteredComms) {
+      const k = dateBucket(m.createdAt);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(m);
+    }
+    return Array.from(groups.entries());
+  }, [filteredComms]);
+
+  const filteredTickets = useMemo(() => {
+    if (!response?.tickets) return [];
+    if (!chartClassFilter) return response.tickets;
+    return response.tickets.filter((t) => t.classification === chartClassFilter);
+  }, [response, chartClassFilter]);
+
+  const ticketCount = response?.tickets?.length ?? 0;
+  const openTicketCount =
+    response?.tickets?.filter((t) =>
+      ["Todo", "In Progress", "In Review"].includes(t.state)
+    ).length ?? 0;
+
+  const last30Comms = useMemo(() => {
+    if (!response?.comms) return 0;
+    const cut = Date.now() - 30 * 86400000;
+    return response.comms.filter((m) => Date.parse(m.createdAt) > cut).length;
+  }, [response]);
+
+  const sinceDaysNum = TIME_WINDOWS.find((w) => w.key === sinceDays)?.days ?? 90;
 
   const abortedChannels: Channel[] = response?.perChannelStatus
     ? (Object.entries(response.perChannelStatus) as [Channel, ChannelStatus][])
@@ -379,638 +427,566 @@ export default function EscalationsBrowser() {
         .map(([ch]) => ch)
     : [];
 
+  // ── Render ─────────────────────────────────────────────────────────────
+
   return (
     <div className="space-y-6">
-      {/* SEARCH */}
-      <form onSubmit={lookup} className="rounded-2xl border border-border bg-panel p-6">
-        <label className="block text-sm text-muted mb-2">Search</label>
-        <div className="flex gap-2">
+      {/* HERO */}
+      <div className="text-center pt-6">
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-brand/25 bg-panel/60 text-xs text-muted2">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand shadow-[0_0_12px_rgba(255,168,205,0.7)]" />
+          Customer Success · live from Chargebee + Metabase
+        </div>
+        <h1 className="mt-4 font-extrabold text-[44px] leading-[1.05] tracking-[-0.035em]">
+          Customer <span className="brand-gradient-text relative inline-block">360<span className="absolute -top-3 -right-5 text-[18px] text-brand">✦</span></span>
+        </h1>
+        <p className="mt-4 max-w-[560px] mx-auto text-sm text-muted2 leading-relaxed">
+          Search by business name or entity_id. One search returns triage of their latest message,
+          all related Linear tickets, and the full comms timeline across App Chat, Email, Phone,
+          Video, and SMS.
+        </p>
+        <div className="mt-4 flex justify-center gap-5 text-xs text-muted2">
+          <span className="flex items-center gap-1"><span className="text-brand">✦</span> Auto-triage</span>
+          <span className="flex items-center gap-1"><span className="text-brand">✦</span> Finance + CX tickets</span>
+          <span className="flex items-center gap-1"><span className="text-brand">✦</span> 5-channel comms</span>
+        </div>
+      </div>
+
+      {/* SEARCH PILL */}
+      <form onSubmit={lookup} className="flex justify-center">
+        <div
+          className="flex items-center gap-3 pl-5 pr-2 py-2 rounded-full border border-border2 bg-panel/70 w-full max-w-[640px]"
+          style={{ boxShadow: "0 0 0 1px rgba(255,168,205,0.05), 0 0 40px -16px rgba(255,168,205,0.3)" }}
+        >
+          <span className="text-[10px] uppercase tracking-wider font-bold text-muted">Search</span>
           <input
-            className="flex-1 rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
-            placeholder="Lacquer Lounge   ·   8e3f…   ·   owner@bizname.com   ·   AbCdEf123"
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted"
+            placeholder="Business name, entity_id, email, or Chargebee customer id"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
           />
           <select
-            className="rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
+            className="bg-transparent text-xs text-muted outline-none cursor-pointer"
             value={sinceDays}
             onChange={(e) => setSinceDays(e.target.value)}
-            title="Time window"
           >
             {TIME_WINDOWS.map((t) => (
-              <option key={t.key} value={t.key}>
-                {t.label}
-              </option>
+              <option key={t.key} value={t.key} className="bg-panel">{t.label}</option>
             ))}
           </select>
           <button
             type="submit"
             disabled={loading || !query.trim()}
-            className="rounded-lg bg-accent text-white px-4 font-medium disabled:opacity-50"
+            className="rounded-full bg-brand text-[#2a0d1c] font-semibold px-5 py-2 text-sm disabled:opacity-50"
+            style={{ boxShadow: "0 0 30px -8px rgba(255,168,205,0.5)" }}
           >
             {loading ? "Looking up…" : "Look up"}
           </button>
         </div>
-        <p className="text-xs text-muted mt-3">
-          Heads-up: the comms feeds are large (~130 MB each). The first lookup after a redeploy
-          may time out as Vercel warms its edge cache — just retry. Subsequent lookups are fast
-          for 24 hours.
-        </p>
       </form>
 
-      {!response && !loading && (
-        <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
-          Results will appear here. Tip: substring matches work for biz names, so "lacquer"
-          finds "Lacquer Lounge LLC".
-        </div>
-      )}
-
-      {loading && (
-        <div className="rounded-2xl border border-border bg-panel p-6 text-muted">
-          Streaming the 5 comms feeds for that entity. First call after a redeploy can take
-          30–60 seconds; second call is instant.
-        </div>
-      )}
-
+      {/* ERROR */}
       {response && response.ok === false && (
-        <div className="rounded-2xl border border-err/40 bg-err/10 p-6">
-          <p className="text-err font-medium">Error</p>
-          <p className="text-sm mt-2 whitespace-pre-wrap">{response.error}</p>
+        <div className="rounded-xl border border-err/40 bg-err/10 p-4 text-sm">
+          <p className="text-err font-medium">Lookup failed</p>
+          <p className="text-muted2 mt-1">{response.error}</p>
         </div>
       )}
 
+      {/* NO MATCH */}
       {response && response.ok && !response.customer && (
-        <div className="rounded-2xl border border-warn/40 bg-warn/10 p-6">
-          <p className="font-medium text-warn">No customer match</p>
-          <p className="text-sm text-muted mt-2">
-            Couldn't find anyone in BaseSheet for "{response.query}". Try a different spelling,
-            an email, or paste the entity UUID.
-          </p>
+        <div className="rounded-xl border border-warn/40 bg-warn/10 p-4 text-sm">
+          <p className="text-warn font-medium">No customer match for &quot;{response.query}&quot;</p>
+          <p className="text-muted2 mt-1">Try a UUID, exact biz name, an email, or the Chargebee customer id.</p>
         </div>
       )}
 
+      {/* HERO CUSTOMER CARD */}
       {response && response.ok && response.customer && (
         <>
-          {/* CUSTOMER CARD */}
-          <div className="rounded-2xl border border-border bg-panel p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-medium">{response.customer.bizName || "(no name)"}</h2>
-                <p className="text-sm text-muted mt-1">
-                  {response.customer.email && (
-                    <span>
-                      <span className="text-text">{response.customer.email}</span>
-                      {response.customer.phone ? <span> · {response.customer.phone}</span> : null}
-                    </span>
+          <div
+            className="rounded-2xl p-7 border"
+            style={{
+              borderColor: "rgba(78,101,255,0.25)",
+              background:
+                "linear-gradient(135deg, rgba(78,101,255,0.18) 0%, rgba(255,168,205,0.10) 60%, rgba(20,15,30,0.4) 100%)",
+            }}
+          >
+            <div className="flex items-start justify-between gap-6">
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-muted mb-2">
+                  ● Customer · live
+                </div>
+                <div className="text-[36px] md:text-[40px] font-extrabold tracking-[-0.025em] leading-[1.05] truncate">
+                  {response.customer.bizName || "(no name)"}
+                </div>
+                <div className="text-sm text-muted2 mt-2 truncate">
+                  {response.customer.email || "—"}
+                  {response.customer.phone ? ` · ${response.customer.phone}` : ""}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted">
+                  {response.customer.amName && (
+                    <span>AM <span className="text-text">{response.customer.amName}</span></span>
                   )}
-                </p>
-                <p className="text-xs text-muted mt-2">
-                  entity_id <code className="text-text">{response.customer.entityId || "—"}</code>
-                  {response.customer.customerId ? (
-                    <>
-                      {" · "}cb_id <code className="text-text">{response.customer.customerId}</code>
-                    </>
-                  ) : null}
-                </p>
+                  {response.customer.spName && (
+                    <span>SP <span className="text-text">{response.customer.spName}</span></span>
+                  )}
+                  {response.customer.aeName && (
+                    <span>AE <span className="text-text">{response.customer.aeName}</span></span>
+                  )}
+                </div>
+                <div className="text-[10px] text-muted/70 mt-2 font-mono truncate">
+                  {response.customer.entityId || "—"}
+                </div>
               </div>
-              <div className="text-right text-sm">
-                {response.customer.amName && (
-                  <p>
-                    <span className="text-muted">AM</span> {response.customer.amName}
-                  </p>
-                )}
-                {response.customer.spName && (
-                  <p>
-                    <span className="text-muted">SP</span> {response.customer.spName}
-                  </p>
-                )}
-                {response.customer.aeName && (
-                  <p>
-                    <span className="text-muted">AE</span> {response.customer.aeName}
-                  </p>
-                )}
+              <div className="text-right shrink-0">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-muted">MRR</div>
+                <div className="text-[36px] md:text-[40px] font-extrabold tracking-[-0.025em] leading-[1.05]">
+                  {typeof response.customer.monthlyRevenue === "number"
+                    ? `$${response.customer.monthlyRevenue.toFixed(0)}`
+                    : "—"}
+                </div>
                 {response.customer.status && (
-                  <p className="mt-1 text-xs text-muted">status: {response.customer.status}</p>
-                )}
-                {typeof response.customer.monthlyRevenue === "number" && (
-                  <p className="text-xs text-muted">
-                    MRR ${response.customer.monthlyRevenue.toFixed(2)}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {response.matches && response.matches.length > 1 && (
-              <div className="mt-4 text-xs text-muted">
-                <p className="mb-1">{response.matches.length} matches found. Showing first; others:</p>
-                <ul className="list-disc list-inside">
-                  {response.matches.slice(1).map((m) => (
-                    <li key={m.entityId}>
-                      <span className="text-text">{m.bizName}</span> — {m.email || "(no email)"} ·{" "}
-                      <code>{m.entityId.slice(0, 8)}…</code>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-muted">
-                  To pin to one, paste their full <code>entity_id</code> in the search box.
-                </p>
-              </div>
-            )}
-
-            {response.lookupNotes && response.lookupNotes.length > 0 && (
-              <div className="mt-3 text-xs text-muted">
-                {response.lookupNotes.map((n, i) => (
-                  <p key={i}>· {n}</p>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* PARTIAL-RESULTS / RETRY PER CHANNEL */}
-          {abortedChannels.length > 0 && (
-            <div className="rounded-2xl border border-warn/40 bg-warn/5 p-4">
-              <p className="text-sm text-warn font-medium mb-2">
-                {abortedChannels.length} channel{abortedChannels.length === 1 ? "" : "s"} timed out
-              </p>
-              <div className="flex flex-wrap gap-2 text-xs">
-                {abortedChannels.map((ch) => {
-                  const meta = CHANNELS.find((c) => c.key === ch);
-                  const busy = retrying.has(ch);
-                  return (
-                    <button
-                      key={ch}
-                      type="button"
-                      onClick={() => retryChannel(ch)}
-                      disabled={busy}
-                      className={`rounded-full border px-3 py-1 ${meta?.cls || ""} disabled:opacity-50`}
-                    >
-                      {busy ? `Loading ${meta?.label}…` : `Retry ${meta?.label}`}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-xs text-muted mt-2">
-                Each retry runs that channel solo with a 50s budget — usually fast once the cache
-                is warm.
-              </p>
-            </div>
-          )}
-
-          {/* AUTO-TRIAGE of the latest client message */}
-          {triage.status !== "idle" && (
-            <div className="rounded-2xl border border-border bg-panel p-6">
-              <div className="flex items-baseline justify-between mb-3">
-                <h3 className="text-base font-medium">Triage of latest client message</h3>
-                {triage.result && (
-                  <span
-                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold ${
-                      triage.result.severity === "P0"
-                        ? "bg-err/20 text-err border-err/40"
-                        : triage.result.severity === "P1"
-                          ? "bg-warn/20 text-warn border-warn/40"
-                          : triage.result.severity === "P2"
-                            ? "bg-accent/20 text-accent border-accent/40"
-                            : "bg-panel2 text-muted border-border"
+                  <div
+                    className={`inline-flex items-center gap-1 mt-2 text-xs font-medium rounded-full border px-2 py-0.5 ${
+                      response.customer.status === "ZOCA" || response.customer.status === "active"
+                        ? "border-ok/40 bg-okSoft text-ok"
+                        : response.customer.status === "CHURNED"
+                          ? "border-err/40 bg-errSoft text-err"
+                          : "border-border bg-panel2 text-muted2"
                     }`}
                   >
-                    {triage.result.severity}
-                  </span>
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-current" />
+                    {response.customer.status}
+                  </div>
                 )}
               </div>
+            </div>
+          </div>
 
-              {triage.status === "loading" && (
-                <p className="text-sm text-muted">
-                  Running the agent on this customer's most recent message
-                  {triage.sourceMessage ? ` (${triage.sourceMessage.channel}, ${relTime(triage.sourceMessage.createdAt)})…` : "…"}
-                </p>
+          {/* CHARTS GRID */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1.7fr_1fr] gap-3">
+            <div className="rounded-xl border border-border bg-panel p-4">
+              <CommsActivityChart
+                comms={(response.comms || []) as any}
+                sinceDays={sinceDaysNum}
+              />
+            </div>
+            <div className="rounded-xl border border-border bg-panel p-4">
+              <ChannelMixDonut
+                comms={(response.comms || []) as any}
+                sinceDays={sinceDaysNum}
+                selected={chartChannelFilter}
+                onSelect={(ch) => {
+                  setChartChannelFilter(ch);
+                  if (ch) setTab("history");
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="rounded-xl border border-border bg-panel p-4">
+              <TicketsClassificationDonut
+                tickets={(response.tickets || []) as any}
+                selected={chartClassFilter}
+                onSelect={(c) => {
+                  setChartClassFilter(c);
+                  if (c) setTab("tickets");
+                }}
+              />
+            </div>
+            <div className="rounded-xl border border-border bg-panel p-4">
+              <TicketsOverTimeChart tickets={(response.tickets || []) as any} weeks={12} />
+            </div>
+            <ResponseHealthCard
+              comms={(response.comms || []) as any}
+              autoResolveConfidence={triage.result?.autoResolvable.confidence ?? null}
+            />
+          </div>
+
+          {/* SECTION TABS */}
+          <div className="flex items-center gap-1 p-1 rounded-full bg-panel border border-border w-fit">
+            <TabBtn active={tab === "triage"} onClick={() => setTab("triage")}>
+              Triage
+              {triage.status === "ready" && triage.result && (
+                <span className={`ml-2 text-[10px] rounded-md border px-1.5 py-0 ${SEVERITY[triage.result.severity]?.chip || ""}`}>
+                  {triage.result.severity}
+                </span>
               )}
+              {triage.status === "loading" && <span className="ml-2 text-[10px] text-muted">…</span>}
+            </TabBtn>
+            <TabBtn active={tab === "tickets"} onClick={() => setTab("tickets")}>
+              Tickets
+              {ticketCount > 0 && (
+                <span className="ml-1.5 text-[10px] text-muted bg-panel2 px-1.5 rounded-full">
+                  {ticketCount}
+                </span>
+              )}
+            </TabBtn>
+            <TabBtn active={tab === "history"} onClick={() => setTab("history")}>
+              History
+              {response.stats?.total ? (
+                <span className="ml-1.5 text-[10px] text-muted bg-panel2 px-1.5 rounded-full">
+                  {response.stats.total}
+                </span>
+              ) : null}
+            </TabBtn>
+          </div>
 
+          {/* ── TRIAGE TAB ─────────────────────────────── */}
+          {tab === "triage" && (
+            <div>
+              {triage.status === "idle" && commsState.status === "loading" && (
+                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                  Fetching comms history first (5 channels)…
+                </div>
+              )}
               {triage.status === "skipped" && (
-                <p className="text-sm text-muted">{triage.reason || "No client message available."}</p>
+                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                  {triage.reason}
+                </div>
               )}
-
+              {triage.status === "loading" && (
+                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                  Running the agent on the latest client message
+                  {triage.sourceMessage ? ` (${triage.sourceMessage.channel}, ${relTime(triage.sourceMessage.createdAt)} ago)…` : "…"}
+                </div>
+              )}
               {triage.status === "error" && (
-                <p className="text-sm text-err">
-                  Triage failed: {triage.error}
-                </p>
+                <div className="rounded-xl border border-err/40 bg-err/10 p-4 text-sm">
+                  <p className="text-err font-medium">Triage failed</p>
+                  <p className="text-muted2 mt-1 whitespace-pre-wrap">{triage.error}</p>
+                </div>
               )}
-
               {triage.status === "ready" && triage.result && triage.sourceMessage && (
-                <div className="space-y-4 text-sm">
-                  {/* Source message */}
-                  <div className="rounded-lg border border-border bg-panel2 p-3">
-                    <div className="flex items-baseline gap-2 text-xs">
-                      <span className="text-muted">Source message ·</span>
-                      <span className="text-text capitalize">{triage.sourceMessage.channel.replace("_", " ")}</span>
-                      <span className="text-muted">·</span>
-                      <span className="text-muted" title={triage.sourceMessage.createdAt}>
-                        {relTime(triage.sourceMessage.createdAt)}
+                <div
+                  className="rounded-xl border border-border bg-panel severity-bar pl-5 pr-6 py-5"
+                  style={{ ["--bar" as any]: SEVERITY[triage.result.severity]?.bar || "#2c333d" }}
+                >
+                  <div className="flex items-baseline justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-semibold rounded-md border px-1.5 py-0.5 ${SEVERITY[triage.result.severity]?.chip || ""}`}>
+                        {triage.result.severity}
+                      </span>
+                      <span className="font-semibold text-base capitalize">
+                        {triage.result.category.replace(/_/g, " ")}
                       </span>
                     </div>
-                    <p className="mt-1.5 whitespace-pre-wrap text-text">
-                      {triage.sourceMessage.body || "(empty body)"}
-                    </p>
+                    <span className="text-xs text-muted">
+                      {triage.sourceMessage.channel.replace("_", " ")} · {relTime(triage.sourceMessage.createdAt)} ago
+                    </span>
                   </div>
 
-                  {/* Category + owner */}
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <p className="text-muted text-xs mb-1">Category</p>
-                      <p className="capitalize">{triage.result.category.replace(/_/g, " ")}</p>
+                  <div className="rounded-lg border border-border2 bg-panel2 px-3 py-2 text-sm text-muted2 italic mb-4">
+                    &quot;{triage.sourceMessage.body}&quot;
+                  </div>
+
+                  <div className="text-sm leading-relaxed mb-4">
+                    <span className="text-muted">Owner</span>{" "}
+                    <strong className="font-semibold">
+                      {triage.result.ownerSuggestion.namedPerson || triage.result.ownerSuggestion.role}
+                    </strong>
+                    {triage.result.ownerSuggestion.namedPerson && (
+                      <span className="text-muted"> · {triage.result.ownerSuggestion.role}</span>
+                    )}
+                    <span className="text-muted2"> — {triage.result.ownerSuggestion.rationale}</span>
+                  </div>
+
+                  <p className="text-sm leading-relaxed mb-4 whitespace-pre-wrap">{triage.result.summary}</p>
+
+                  <div className="rounded-lg border border-border2 bg-panel2 mb-3">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-border text-xs text-muted">
+                      <span>
+                        Draft reply · {triage.result.draftReply.channel}
+                        {triage.result.draftReply.subject ? ` · "${triage.result.draftReply.subject}"` : ""}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard?.writeText(triage.result!.draftReply.body)}
+                        className="text-muted hover:text-text"
+                      >
+                        Copy
+                      </button>
                     </div>
-                    <div>
-                      <p className="text-muted text-xs mb-1">Suggested owner</p>
-                      <p>
-                        <span className="font-medium">
-                          {triage.result.ownerSuggestion.namedPerson || triage.result.ownerSuggestion.role}
-                        </span>
-                        {triage.result.ownerSuggestion.namedPerson ? (
-                          <span className="text-muted"> · {triage.result.ownerSuggestion.role}</span>
-                        ) : null}
-                      </p>
-                      <p className="text-xs text-muted mt-1">{triage.result.ownerSuggestion.rationale}</p>
-                    </div>
-                  </div>
-
-                  {/* Summary */}
-                  <div>
-                    <p className="text-muted text-xs mb-1">Summary</p>
-                    <p className="leading-relaxed whitespace-pre-wrap">{triage.result.summary}</p>
-                  </div>
-
-                  {/* Draft reply */}
-                  <div>
-                    <p className="text-muted text-xs mb-1">
-                      Draft reply ({triage.result.draftReply.channel}
-                      {triage.result.draftReply.subject ? ` · "${triage.result.draftReply.subject}"` : ""})
-                    </p>
-                    <pre className="text-sm leading-relaxed whitespace-pre-wrap rounded-lg border border-border bg-panel2 p-3">
+                    <pre className="px-3 py-3 text-sm leading-relaxed whitespace-pre-wrap font-sans">
 {triage.result.draftReply.body}
                     </pre>
                   </div>
 
-                  {/* Auto-resolve */}
-                  <div className="text-xs">
-                    <p className="text-muted mb-1">Auto-resolve</p>
-                    <p>
-                      <span
-                        className={triage.result.autoResolvable.eligible ? "text-ok font-medium" : "text-muted font-medium"}
-                      >
-                        {triage.result.autoResolvable.eligible ? "Eligible" : "Not eligible"}
-                      </span>{" "}
-                      <span className="text-muted">
-                        ({(triage.result.autoResolvable.confidence * 100).toFixed(0)}% confidence)
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span
+                      className={`rounded-md border px-2 py-1 ${
+                        triage.result.autoResolvable.eligible
+                          ? "bg-okSoft text-ok border-ok/40"
+                          : "bg-panel2 text-muted border-border"
+                      }`}
+                    >
+                      Auto-resolve {triage.result.autoResolvable.eligible ? "eligible" : "not eligible"} · {(triage.result.autoResolvable.confidence * 100).toFixed(0)}%
+                    </span>
+                    {triage.result.routing.actions.map((a: any, i: number) => (
+                      <span key={i} className="rounded-md border border-border bg-panel2 px-2 py-1 text-muted2">
+                        {a.type === "slack_dm" && <>Slack DM <strong className="text-text">{a.to}</strong></>}
+                        {a.type === "slack_channel" && <>Slack <strong className="text-text">#{a.channel}</strong></>}
+                        {a.type === "linear_issue" && <>Linear · <strong className="text-text">{a.title}</strong></>}
+                        {a.type === "email" && <>Email <strong className="text-text">{a.to}</strong></>}
+                        {a.type === "noop" && <>{a.reason}</>}
                       </span>
-                    </p>
-                    <p className="text-muted mt-1">{triage.result.autoResolvable.reason}</p>
+                    ))}
                   </div>
-
-                  {/* Routing */}
-                  {triage.result.routing.actions.length > 0 && (
-                    <div>
-                      <p className="text-muted text-xs mb-1">Routing actions</p>
-                      <ul className="text-sm space-y-2">
-                        {triage.result.routing.actions.map((a: any, i: number) => (
-                          <li key={i} className="rounded-lg border border-border bg-panel2 p-3">
-                            <p className="text-xs uppercase text-muted">{a.type}</p>
-                            {a.type === "slack_dm" && (
-                              <p>
-                                <strong>{a.to}</strong>: {a.message}
-                              </p>
-                            )}
-                            {a.type === "slack_channel" && (
-                              <p>
-                                <strong>#{a.channel}</strong>: {a.message}
-                              </p>
-                            )}
-                            {a.type === "linear_issue" && (
-                              <>
-                                <p>
-                                  <strong>
-                                    {a.team ? `${a.team} · ` : ""}
-                                    {a.title}
-                                  </strong>
-                                </p>
-                                <p className="text-muted whitespace-pre-wrap mt-1">{a.body}</p>
-                                {a.labels?.length ? (
-                                  <p className="text-xs text-muted mt-1">labels: {a.labels.join(", ")}</p>
-                                ) : null}
-                              </>
-                            )}
-                            {a.type === "email" && (
-                              <>
-                                <p>
-                                  <strong>{a.to}</strong> — {a.subject}
-                                </p>
-                                <p className="text-muted whitespace-pre-wrap mt-1">{a.body}</p>
-                              </>
-                            )}
-                            {a.type === "noop" && <p className="text-muted">{a.reason}</p>}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
           )}
 
-          {/* TICKETS for this customer (sourced from Metabase) */}
-          {response.tickets && response.tickets.length > 0 && (
-            <div className="rounded-2xl border border-border bg-panel p-6">
-              <div className="flex items-baseline justify-between mb-3">
-                <h3 className="text-base font-medium">Tickets for this customer</h3>
-                <span className="text-xs text-muted">
-                  {response.tickets.length} match{response.tickets.length === 1 ? "" : "es"} · sorted latest first
+          {/* ── TICKETS TAB ──────────────────────────────── */}
+          {tab === "tickets" && (
+            <div className="rounded-xl border border-border bg-panel overflow-hidden">
+              <div className="px-4 py-2 border-b border-border text-xs text-muted flex items-center justify-between">
+                <span>
+                  {filteredTickets.length} {filteredTickets.length === 1 ? "ticket" : "tickets"}
+                  {chartClassFilter && (
+                    <span className="ml-2">
+                      · filtered to{" "}
+                      <strong className="text-text">{CLASSIFICATION_LABELS[chartClassFilter] || chartClassFilter}</strong>
+                    </span>
+                  )}
                 </span>
-              </div>
-              <ul className="space-y-2">
-                {response.tickets.map((t) => {
-                  const statusCls =
-                    t.state === "Done"
-                      ? "bg-ok/15 text-ok border-ok/40"
-                      : t.state === "In Progress" || t.state === "In Review"
-                        ? "bg-accent/15 text-accent border-accent/40"
-                        : t.state === "Canceled" || t.state === "Duplicate"
-                          ? "bg-err/15 text-err border-err/40"
-                          : "bg-panel2 text-text border-border";
-                  const classCls =
-                    t.classification === "Churn Ticket"
-                      ? "bg-err/15 text-err border-err/40"
-                      : t.classification === "Retention Risk Alert"
-                        ? "bg-warn/15 text-warn border-warn/40"
-                        : t.classification === "paid_user_offboarding"
-                          ? "bg-purple-500/15 text-purple-300 border-purple-500/40"
-                          : t.classification === "Subscription Support Ticket"
-                            ? "bg-accent/15 text-accent border-accent/40"
-                            : t.classification === "Subscription_Cancellation"
-                              ? "bg-pink-500/15 text-pink-300 border-pink-500/40"
-                              : "bg-panel2 text-muted border-border";
-                  return (
-                    <li
-                      key={t.id}
-                      className="rounded-lg border border-border bg-panel2 px-3 py-2"
-                    >
-                      <div className="flex items-baseline gap-2 text-xs flex-wrap">
-                        <span className="font-mono text-muted">{t.identifier || "—"}</span>
-                        <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${statusCls}`}>
-                          {t.state || "—"}
-                        </span>
-                        {t.classification && (
-                          <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${classCls}`}>
-                            {t.classification}
-                          </span>
-                        )}
-                        {t.churnPotentialStatus && (
-                          <span className="inline-flex items-center rounded-md border border-warn/40 bg-warn/10 text-warn px-1.5 py-0.5">
-                            {t.churnPotentialStatus}
-                          </span>
-                        )}
-                        <span className="ml-auto text-muted" title={t.createdAt}>
-                          {relTime(t.createdAt)}
-                        </span>
-                      </div>
-                      <div className="mt-1.5">
-                        <a
-                          href={t.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sm font-medium hover:underline underline-offset-4"
-                        >
-                          {t.title}
-                        </a>
-                      </div>
-                      <p className="mt-1 text-xs text-muted">
-                        {t.amName && (
-                          <>
-                            <span className="text-muted">AM</span>{" "}
-                            <span className="text-text">{t.amName}</span>
-                          </>
-                        )}
-                        {t.assigneeEmail && (
-                          <>
-                            {t.amName ? " · " : ""}
-                            <span className="text-muted">Assignee</span>{" "}
-                            <span className="text-text">{t.assigneeEmail}</span>
-                          </>
-                        )}
-                        {t.creatorEmail && (
-                          <>
-                            {(t.amName || t.assigneeEmail) ? " · " : ""}
-                            <span className="text-muted">By</span>{" "}
-                            <span className="text-text">{t.creatorEmail}</span>
-                          </>
-                        )}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ul>
-              <p className="text-xs text-muted mt-3">
-                Sourced from Metabase tickets feed — matched by entity_id, customer_id, or business
-                name. Click a title to open in Linear.
-              </p>
-            </div>
-          )}
-
-          {response.tickets && response.tickets.length === 0 && response.customer.entityId && (
-            <div className="rounded-2xl border border-border bg-panel p-4 text-xs text-muted">
-              No tickets found for this customer in the Metabase ticket feed (entity_id, customer_id, or business name).
-            </div>
-          )}
-
-          {/* COMMS LOADING / ERROR (phase 2) */}
-          {commsState.status === "loading" && (
-            <div className="rounded-2xl border border-border bg-panel p-6 text-muted text-sm">
-              Fetching comms history (5 channels, ~130 MB each — first call after a redeploy can be slow)…
-            </div>
-          )}
-          {commsState.status === "error" && (
-            <div className="rounded-2xl border border-warn/40 bg-warn/5 p-6">
-              <p className="text-warn font-medium">Comms history unavailable</p>
-              <p className="text-sm text-muted mt-2">{commsState.message}</p>
-              <button
-                type="button"
-                onClick={() => {
-                  // Manually retry phase 2 only.
-                  setCommsState({ status: "loading" });
-                  (async () => {
-                    try {
-                      const u = new URL("/api/escalations", window.location.origin);
-                      u.searchParams.set("q", response.query || query.trim());
-                      u.searchParams.set("sinceDays", sinceDays);
-                      const r = await fetch(u.toString());
-                      const text = await r.text();
-                      const data = JSON.parse(text) as ApiResponse;
-                      if (!data.ok) {
-                        setCommsState({ status: "error", message: data.error || "Failed" });
-                        return;
-                      }
-                      setResponse((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              comms: data.comms,
-                              stats: data.stats,
-                              perChannelStatus: data.perChannelStatus,
-                              skippedComms: false,
-                            }
-                          : prev
-                      );
-                      setCommsState({ status: "ready" });
-                    } catch (err: any) {
-                      setCommsState({
-                        status: "error",
-                        message: err?.message || "Network error",
-                      });
-                    }
-                  })();
-                }}
-                className="mt-3 rounded-lg bg-accent text-white px-3 py-2 text-sm font-medium"
-              >
-                Retry comms fetch
-              </button>
-            </div>
-          )}
-
-          {/* STATS */}
-          {response.stats && (
-            <div className="rounded-2xl border border-border bg-panel p-6">
-              <p className="text-muted text-sm mb-3">
-                {response.stats.total} message{response.stats.total === 1 ? "" : "s"} in window
-              </p>
-              <div className="flex flex-wrap gap-2 text-xs">
-                {CHANNELS.map((c) => {
-                  const n = response.stats!.byChannel[c.key] || 0;
-                  const aborted = response.perChannelStatus?.[c.key]?.aborted;
-                  return (
-                    <span
-                      key={c.key}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${c.cls} ${aborted ? "opacity-50" : ""}`}
-                      title={aborted ? "Channel timed out — retry above" : ""}
-                    >
-                      {c.label} <span className="font-semibold">{n}</span>
-                      {aborted ? <span className="text-warn">·timed out</span> : null}
-                    </span>
-                  );
-                })}
-                <span className="mx-2 text-muted">·</span>
-                {SENDERS.map((s) => {
-                  const n = response.stats!.bySender[s.key] || 0;
-                  return (
-                    <span
-                      key={s.key}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${s.cls}`}
-                    >
-                      {s.label} <span className="font-semibold">{n}</span>
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* FILTERS */}
-          <div className="rounded-2xl border border-border bg-panel p-6 space-y-4">
-            <div>
-              <p className="text-muted text-sm mb-2">Channels</p>
-              <div className="flex flex-wrap gap-2 text-xs">
-                {CHANNELS.map((c) => {
-                  const on = channelFilter.has(c.key);
-                  return (
+                <div className="flex items-center gap-3">
+                  {chartClassFilter && (
                     <button
-                      key={c.key}
                       type="button"
-                      onClick={() => toggleChannel(c.key)}
-                      className={`rounded-full border px-3 py-1 ${
-                        on ? c.cls : "border-border text-muted bg-panel2"
+                      onClick={() => setChartClassFilter(null)}
+                      className="text-muted hover:text-text"
+                    >
+                      Clear filter ✕
+                    </button>
+                  )}
+                  <span>Latest first</span>
+                </div>
+              </div>
+              {filteredTickets.length === 0 && (
+                <div className="px-4 py-6 text-sm text-muted">
+                  {ticketCount === 0
+                    ? "No tickets found in the Metabase feed for this customer."
+                    : "No tickets match this filter."}
+                </div>
+              )}
+              {filteredTickets.map((t) => {
+                const classBar = CLASSIFICATION_COLORS[t.classification] || "#2c333d";
+                const classLabel = CLASSIFICATION_LABELS[t.classification] || t.classification;
+                const stateCls =
+                  t.state === "Done"
+                    ? "text-ok"
+                    : t.state === "In Progress" || t.state === "In Review"
+                      ? "text-accent"
+                      : t.state === "Canceled" || t.state === "Duplicate"
+                        ? "text-err"
+                        : "text-text";
+                return (
+                  <div
+                    key={t.id}
+                    className="severity-bar row-divider px-4 py-3 hover:bg-panel2/60"
+                    style={{ ["--bar" as any]: classBar }}
+                  >
+                    <div className="flex items-center gap-2 text-xs flex-wrap">
+                      <span className="font-mono text-muted">{t.identifier || "—"}</span>
+                      <span
+                        className="rounded-md border px-1.5 py-0.5"
+                        style={{ borderColor: classBar + "66", background: classBar + "15", color: classBar }}
+                      >
+                        {classLabel}
+                      </span>
+                      <span className={stateCls}>{t.state}</span>
+                      {t.churnPotentialStatus && (
+                        <span className="rounded-md border border-warn/40 bg-warnSoft text-warn px-1.5 py-0.5">
+                          {t.churnPotentialStatus}
+                        </span>
+                      )}
+                      <span className="ml-auto text-muted">{relTime(t.createdAt)} ago</span>
+                    </div>
+                    <a
+                      href={t.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block mt-1 text-sm font-medium hover:underline underline-offset-4 truncate"
+                    >
+                      {t.title}
+                    </a>
+                    <div className="text-xs text-muted mt-0.5">
+                      {t.amName && <>AM <span className="text-text">{t.amName}</span></>}
+                      {t.assigneeEmail && (
+                        <>
+                          {t.amName ? " · " : ""}Assignee <span className="text-text">{t.assigneeEmail}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── HISTORY TAB ──────────────────────────────── */}
+          {tab === "history" && (
+            <div className="space-y-3">
+              {commsState.status === "loading" && (
+                <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
+                  Fetching comms history (5 channels)…
+                </div>
+              )}
+              {commsState.status === "error" && (
+                <div className="rounded-xl border border-warn/40 bg-warn/5 p-4">
+                  <p className="text-warn font-medium text-sm">Comms history unavailable</p>
+                  <p className="text-muted2 text-sm mt-1">{commsState.message}</p>
+                </div>
+              )}
+
+              {abortedChannels.length > 0 && (
+                <div className="rounded-xl border border-warn/40 bg-warn/5 p-3">
+                  <p className="text-xs text-warn mb-2">
+                    {abortedChannels.length} channel{abortedChannels.length === 1 ? "" : "s"} timed out
+                  </p>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {abortedChannels.map((ch) => {
+                      const busy = retrying.has(ch);
+                      return (
+                        <button
+                          key={ch}
+                          type="button"
+                          onClick={() => retryChannel(ch)}
+                          disabled={busy}
+                          className="rounded-full border px-3 py-1 disabled:opacity-50"
+                          style={{
+                            borderColor: (CHANNEL_COLORS[ch] || "#2c333d") + "66",
+                            color: CHANNEL_COLORS[ch] || "#7e8794",
+                            background: (CHANNEL_COLORS[ch] || "#2c333d") + "10",
+                          }}
+                        >
+                          {busy ? `Loading ${CHANNEL_LABELS[ch]}…` : `Retry ${CHANNEL_LABELS[ch]}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-xl border border-border bg-panel p-3">
+                <div className="flex flex-wrap gap-2 items-center text-xs">
+                  <span className="text-muted">Channel</span>
+                  {CHANNELS.map((c) => {
+                    const on = chartChannelFilter === null || chartChannelFilter === c;
+                    const color = CHANNEL_COLORS[c];
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setChartChannelFilter(chartChannelFilter === c ? null : c)}
+                        className="rounded-full border px-2.5 py-0.5"
+                        style={{
+                          borderColor: on ? color + "66" : "#222831",
+                          background: on ? color + "15" : "#161827",
+                          color: on ? color : "#7e8794",
+                        }}
+                      >
+                        {CHANNEL_LABELS[c]}
+                      </button>
+                    );
+                  })}
+                  <span className="ml-3 text-muted">Sender</span>
+                  {(["all", "client", "team"] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setSenderFilter(s)}
+                      className={`rounded-full border px-2.5 py-0.5 ${
+                        senderFilter === s ? "border-brand/40 bg-brandSoft text-brand" : "border-border text-muted bg-panel2"
                       }`}
                     >
-                      {c.label}
+                      {s}
                     </button>
-                  );
-                })}
+                  ))}
+                  <input
+                    className="ml-auto bg-panel2 border border-border rounded-lg px-2 py-1 outline-none focus:border-border2 text-xs w-48"
+                    placeholder="Search messages…"
+                    value={textFilter}
+                    onChange={(e) => setTextFilter(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
-            <div>
-              <p className="text-muted text-sm mb-2">Sender</p>
-              <div className="flex gap-2 text-xs">
-                {(["all", "client", "team", "unknown"] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setSenderFilter(s)}
-                    className={`rounded-full border px-3 py-1 ${
-                      senderFilter === s
-                        ? "border-accent text-accent bg-accent/10"
-                        : "border-border text-muted bg-panel2"
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="text-muted text-sm mb-2">Search inside messages</p>
-              <input
-                className="w-full rounded-lg border border-border bg-panel2 px-3 py-2 outline-none focus:border-accent"
-                placeholder="e.g. refund, cancel, charge…"
-                value={textFilter}
-                onChange={(e) => setTextFilter(e.target.value)}
-              />
-            </div>
-          </div>
 
-          {/* TIMELINE */}
-          <div className="rounded-2xl border border-border bg-panel">
-            <div className="px-4 py-2 border-b border-border text-xs text-muted flex items-center justify-between">
-              <span>Sorted latest first (newest at top)</span>
-              <span>{filtered.length} of {response.comms?.length ?? 0} shown</span>
-            </div>
-            {filtered.length === 0 ? (
-              <p className="p-6 text-muted text-sm">
-                No messages match these filters. Loosen the filters or expand the time window above.
-              </p>
-            ) : (
-              <ul>
-                {filtered.map((m, i) => {
-                  const cMeta = CHANNELS.find((c) => c.key === m.channel);
-                  const sMeta = SENDERS.find((s) => s.key === m.sender);
-                  return (
-                    <li
-                      key={`${m.createdAt}-${i}`}
-                      className="border-b border-border last:border-b-0 px-4 py-3"
-                    >
-                      <div className="flex items-baseline gap-2 text-xs">
-                        <span
-                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${cMeta?.cls || ""}`}
-                        >
-                          {cMeta?.label || m.channel}
-                        </span>
-                        <span
-                          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 ${sMeta?.cls || ""}`}
-                        >
-                          {sMeta?.label || m.sender}
-                        </span>
-                        {m.durationSec ? (
-                          <span className="text-muted">{fmtDuration(m.durationSec)}</span>
-                        ) : null}
-                        <span className="ml-auto text-muted" title={m.createdAt}>
-                          {relTime(m.createdAt)}
-                        </span>
+              <div className="rounded-xl border border-border bg-panel overflow-hidden">
+                {filteredComms.length === 0 ? (
+                  <div className="p-6 text-sm text-muted">
+                    {commsState.status === "ready" ? "No messages match these filters." : "Comms not loaded yet."}
+                  </div>
+                ) : (
+                  groupedComms.map(([day, items]) => (
+                    <div key={day}>
+                      <div className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-muted bg-panel2 border-y border-border font-bold">
+                        {day}
                       </div>
-                      <p className="text-sm mt-1.5 whitespace-pre-wrap">{m.body || "(no body)"}</p>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
+                      {items.map((m, i) => (
+                        <div
+                          key={`${day}-${i}`}
+                          className="severity-bar row-divider px-4 py-2.5"
+                          style={{ ["--bar" as any]: CHANNEL_COLORS[m.channel] || "#2c333d" }}
+                        >
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-muted">{CHANNEL_LABELS[m.channel] || m.channel}</span>
+                            <span className="text-muted">·</span>
+                            <span
+                              className={
+                                m.sender === "client"
+                                  ? "text-brand"
+                                  : m.sender === "team"
+                                    ? "text-ok"
+                                    : "text-muted"
+                              }
+                            >
+                              {m.sender}
+                            </span>
+                            {m.durationSec ? (
+                              <span className="text-muted">· {fmtDuration(m.durationSec)}</span>
+                            ) : null}
+                            <span className="ml-auto text-muted" title={m.createdAt}>
+                              {relTime(m.createdAt)} ago
+                            </span>
+                          </div>
+                          <p className="text-sm mt-0.5 whitespace-pre-wrap">{m.body || "(no body)"}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
+
+      {!response && !loading && (
+        <div className="text-center text-xs text-muted pt-4">
+          Substring matches work — &quot;lacquer&quot; finds &quot;Lacquer Lounge LLC&quot;.
+        </div>
+      )}
     </div>
+  );
+}
+
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-4 py-1.5 text-sm rounded-full transition-colors ${
+        active
+          ? "bg-brandSoft text-brand font-semibold"
+          : "text-muted hover:text-text"
+      }`}
+    >
+      {children}
+    </button>
   );
 }

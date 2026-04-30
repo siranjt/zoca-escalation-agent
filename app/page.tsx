@@ -7,29 +7,25 @@ export const metadata = {
 
 export default function Page() {
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Zoca Escalation Agent</h1>
-          <p className="text-muted mt-2">
-            Search by business name, entity ID (UUID), email, or Chargebee customer ID. One
-            search returns triage of their latest message, all related Linear tickets
-            (Finance + CX), and the full comms timeline (App Chat / Email / Phone / Video / SMS).
-          </p>
-        </div>
-        <nav className="flex gap-4 text-sm text-muted whitespace-nowrap">
-          <a href="/triage" className="hover:text-text underline-offset-4 hover:underline">
-            Triage by message
-          </a>
-          <a href="/tickets" className="hover:text-text underline-offset-4 hover:underline">
-            All tickets
-          </a>
-        </nav>
-      </header>
-      <div className="mb-6">
-        <HealthBadge />
+    <main className="min-h-screen hero-bg">
+      <div className="mx-auto max-w-[1180px] px-6 py-6">
+        {/* Top nav */}
+        <header className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-4">
+            <span className="font-black text-[22px] tracking-[-0.04em] leading-none">
+              ZOC<span className="inline-block scale-x-[-1]">Q</span>
+            </span>
+            <span className="text-muted text-sm">·  Customer 360</span>
+          </div>
+          <div className="flex items-center gap-5">
+            <a href="/triage" className="text-sm text-muted2 hover:text-text">Triage</a>
+            <a href="/tickets" className="text-sm text-muted2 hover:text-text">All tickets</a>
+            <HealthBadge />
+          </div>
+        </header>
+
+        <EscalationsBrowser />
       </div>
-      <EscalationsBrowser />
     </main>
   );
 }

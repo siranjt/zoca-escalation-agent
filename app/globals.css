@@ -3,11 +3,11 @@
 @tailwind utilities;
 
 html, body {
-  background: #0b0d10;
-  color: #e7ecf2;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #0a0b14;
+  color: #f4f7fa;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
 }
 
 textarea, input, select, button {
@@ -18,3 +18,40 @@ textarea, input, select, button {
 textarea {
   resize: vertical;
 }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1f2233; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #2a2e44; }
+
+.row-divider { border-bottom: 1px solid #1f2233; }
+
+.severity-bar { position: relative; }
+.severity-bar::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--bar, #2c333d);
+}
+
+.brand-gradient-text {
+  background: linear-gradient(180deg, #ffa8cd 0%, #ff7eb9 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-bg {
+  background:
+    radial-gradient(ellipse 70% 40% at 50% 0%, rgba(78,101,255,0.12) 0%, rgba(255,168,205,0.06) 35%, transparent 70%),
+    #0a0b14;
+}
+
+/* recharts surfaces */
+.recharts-tooltip-wrapper:focus,
+.recharts-surface:focus { outline: none; }
+.recharts-cartesian-axis-tick text { fill: #5d6478; font-family: var(--font-sans); }
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: #1f2233; }
+.recharts-active-dot circle { stroke: #0a0b14; stroke-width: 2; }
